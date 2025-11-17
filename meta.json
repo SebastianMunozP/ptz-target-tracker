@@ -1,0 +1,30 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "viam:ptz-target-tracker",
+  "visibility": "public",
+  "url": "",
+  "description": "PTZ camera tracking service that automatically follows a target frame using ONVIF PTZ control",
+  "models": [
+    {
+      "api": "rdk:service:generic",
+      "model": "viam:ptz-target-tracker:pose-tracker",
+      "short_description": "PTZ camera tracking service that automatically follows a target frame using ONVIF PTZ control",
+      "markdown_link": "README.md#model-viam:ptz-target-tracker:pose-tracker"
+    }
+  ],
+  "applications": null,
+  "markdown_link": "README.md",
+  "entrypoint": "bin/ptz-target-tracker",
+  "first_run": "",
+  "build": {
+    "build": "make module.tar.gz",
+    "setup": "make setup",
+    "path": "module.tar.gz",
+    "arch": [
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/arm64",
+      "windows/amd64"
+    ]
+  }
+}
