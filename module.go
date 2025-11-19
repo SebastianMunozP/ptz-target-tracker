@@ -75,6 +75,15 @@ type poseTracker struct {
 	robotClient         robot.Robot
 	targetComponentName string
 	onvifPTZClientName  string
+
+	baselinePan               float64
+	baselineTilt              float64
+	baselineZoomX             float64
+	baselineCameraOrientation *spatialmath.OrientationVectorDegrees
+	baselineDirection         r3.Vector // World direction at calibration
+
+	// Fixed camera position
+	cameraPosition r3.Vector // e.g., (1600, 0, -600)
 }
 
 // Close implements resource.Resource.
@@ -130,17 +139,17 @@ func (s *poseTracker) Name() resource.Name {
 	return s.name
 }
 
-func (s *poseTracker) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	s.logger.Infof("DoCommand: %+v", cmd)
+func (t *poseTracker) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	t.logger.Infof("DoCommand: %+v", cmd)
 	switch cmd["command"] {
 	case "start":
-		go s.trackingLoop(s.cancelCtx)
+		go t.trackingLoop(t.cancelCtx)
 		return map[string]interface{}{"status": "running"}, nil
 	case "stop":
-		s.cancelFunc()
+		t.cancelFunc()
 		return map[string]interface{}{"status": "stopped"}, nil
 	case "get-required-camera-to-target-orientation":
-		requiredCameraToTargetOrientation, err := s.getRequiredCameraToTargetOrientation(s.cancelCtx)
+		requiredCameraToTargetOrientation, err := t.getRequiredCameraToTargetOrientation(t.cancelCtx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get required camera to target orientation: %v", err)
 		}
@@ -157,28 +166,75 @@ func (s *poseTracker) DoCommand(ctx context.Context, cmd map[string]interface{})
 
 		return map[string]interface{}{"status": "required camera to target orientation", "orientation": requiredCameraToTargetOrientationDict}, nil
 	case "get-target-pose-in-camera-frame":
-		targetPoseInCameraFrame := s.getTargetPoseInCameraFrame(s.cancelCtx)
+		targetPoseInCameraFrame := t.getTargetPoseInCameraFrame(t.cancelCtx)
 		if targetPoseInCameraFrame == nil {
 			return nil, fmt.Errorf("failed to get target pose in camera frame")
 		}
-		s.logger.Infof("Target pose in camera frame: %+v", targetPoseInCameraFrame.Pose())
-		targetPoseInCameraFrameDegrees := s.poseToDictDegrees(targetPoseInCameraFrame.Pose())
+		t.logger.Infof("Target pose in camera frame: %+v", targetPoseInCameraFrame.Pose())
+		targetPoseInCameraFrameDegrees := t.poseToDictDegrees(targetPoseInCameraFrame.Pose())
 		return map[string]interface{}{"status": "target pose in camera frame", "target_pose_in_camera_frame": targetPoseInCameraFrameDegrees}, nil
 	case "get-camera-pose":
-		cameraPose := s.getCameraPose(s.cancelCtx)
+		cameraPose := t.getCameraPose(t.cancelCtx)
 		if cameraPose == nil {
 			return nil, fmt.Errorf("failed to get camera pose")
 		}
 		return map[string]interface{}{"status": "camera pose", "camera_pose": cameraPose}, nil
 	case "get-camera-current-ptz-status":
-		panTiltX, panTiltY, zoomX, err := s.getCameraCurrentPTZStatus(s.cancelCtx)
+		panTiltX, panTiltY, zoomX, err := t.getCameraCurrentPTZStatus(t.cancelCtx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get camera current PTZ status: %v", err)
 		}
 		return map[string]interface{}{"pan_tilt_x": panTiltX, "pan_tilt_y": panTiltY, "zoom_x": zoomX}, nil
+	case "save-baseline-camera-ptz-and-orientation":
+		err := t.recordBaseline(t.cancelCtx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to record baseline: %v", err)
+		}
+		return map[string]interface{}{
+			"status":        "success",
+			"baselinePan":   t.baselinePan,
+			"baselineTilt":  t.baselineTilt,
+			"baselineZoomX": t.baselineZoomX,
+			"baselineDirection": map[string]interface{}{
+				"x": t.baselineDirection.X,
+				"y": t.baselineDirection.Y,
+				"z": t.baselineDirection.Z,
+			}}, nil
 	default:
 		return nil, fmt.Errorf("invalid command: %v", cmd["command"])
 	}
+}
+
+// Call this after calibration (camera pointing at target)
+func (t *poseTracker) recordBaseline(ctx context.Context) error {
+	// 1. Get current PTZ position
+	panTiltX, panTiltY, zoomX, err := t.getCameraCurrentPTZStatus(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get camera current PTZ status: %v", err)
+	}
+
+	t.baselinePan = panTiltX
+	t.baselineTilt = panTiltY
+	t.baselineZoomX = zoomX
+
+	// 2. Get target position in world
+	targetPose := t.getTargetPose(ctx)
+	targetPos := targetPose.Pose().Point()
+
+	// 3. Calculate baseline direction
+	t.baselineDirection = r3.Vector{
+		X: targetPos.X - t.cameraPosition.X,
+		Y: targetPos.Y - t.cameraPosition.Y,
+		Z: targetPos.Z - t.cameraPosition.Z,
+	}
+	t.baselineDirection = t.baselineDirection.Mul(1.0 / t.baselineDirection.Norm())
+
+	t.logger.Infof("Baseline calibration:")
+	t.logger.Infof("  Pan: %f, Tilt: %f", t.baselinePan, t.baselineTilt)
+	t.logger.Infof("  Direction: (%f, %f, %f)",
+		t.baselineDirection.X, t.baselineDirection.Y, t.baselineDirection.Z)
+
+	return nil
 }
 
 // poseToDictDegrees converts a spatialmath.Pose to a dictionary with orientation in degrees
@@ -491,133 +547,117 @@ func (t *poseTracker) trackingLoop(ctx context.Context) {
 	ticker := time.NewTicker(updateInterval)
 	defer ticker.Stop()
 
-	fsc, err := t.robotClient.FrameSystemConfig(ctx)
-	if err != nil {
-		t.logger.Error("Failed to get frame system config: %v", err)
-		return
-	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			// 1. Get the target pose in the frame system
-			targetFramePart := touch.FindPart(fsc, t.targetComponentName)
-			if targetFramePart == nil {
-				t.logger.Errorf("can't find frame for %v", t.targetComponentName)
-				continue
-			}
-			targetPose, err := t.robotClient.GetPose(ctx, targetFramePart.FrameConfig.Name(), "", []*referenceframe.LinkInFrame{}, map[string]interface{}{})
+			err := t.trackTarget(ctx)
 			if err != nil {
-				t.logger.Errorf("Failed to get pose: %v", err)
-				continue
-			}
-			t.logger.Infof("Target pose: %+v", targetPose)
-
-			cameraFramePart := touch.FindPart(fsc, t.cfg.PTZCameraName)
-			if cameraFramePart == nil {
-				t.logger.Errorf("can't find frame for %v", t.cfg.PTZCameraName)
-				continue
-			}
-			cameraPose, err := t.robotClient.GetPose(ctx, cameraFramePart.FrameConfig.Name(), "", []*referenceframe.LinkInFrame{}, map[string]interface{}{})
-			if err != nil {
-				t.logger.Errorf("Failed to get pose: %v", err)
-				continue
-			}
-			t.logger.Infof("Camera pose: %+v", cameraPose)
-
-			targetPoseInCameraFrame, err := t.robotClient.TransformPose(ctx, targetPose, cameraFramePart.FrameConfig.Name(), []*referenceframe.LinkInFrame{})
-			if err != nil {
-				t.logger.Errorf("Failed to transform target pose to camera frame: %v", err)
-				continue
-			}
-			t.logger.Infof("Target pose in camera frame: %+v", targetPoseInCameraFrame)
-
-			// Log position details for debugging
-			pos := targetPoseInCameraFrame.Pose().Point()
-			t.logger.Infof("Target position relative to camera: X=%.1f (right+), Y=%.1f (up+), Z=%.1f (forward+)",
-				pos.X, pos.Y, pos.Z)
-
-			// 3. Calculate pan/tilt angles needed to center the target in the PTZ camera frame
-			pan, tilt, zoom := t.calculatePanTiltZoom(targetPoseInCameraFrame)
-			t.logger.Infof("Pan: %f, Tilt: %f, Zoom: %f", pan, tilt, zoom)
-
-			// 4. Send relative move command to PTZ
-			err = t.movePTZ(ctx, pan, tilt, zoom)
-			if err != nil {
-				t.logger.Errorf("Failed to move PTZ: %v", err)
+				t.logger.Errorf("Failed to track target: %v", err)
 			}
 		}
 	}
 }
 
-func (t *poseTracker) calculatePanTiltZoom(targetPoseInCameraFrame *referenceframe.PoseInFrame) (float64, float64, float64) {
-	t.logger.Infof("Calculating pan and tilt")
-	t.logger.Infof("Target pose in camera frame: %+v", targetPoseInCameraFrame)
+// Main tracking loop
+func (t *poseTracker) trackTarget(ctx context.Context) error {
+	// 1. Get target position in world frame
+	targetPose := t.getTargetPose(ctx)
+	targetPos := targetPose.Pose().Point()
 
-	// Position relative to camera
-	x := targetPoseInCameraFrame.Pose().Point().X // Right/Left (positive = right)
-	y := targetPoseInCameraFrame.Pose().Point().Y // Up/Down (positive = up)
-	z := targetPoseInCameraFrame.Pose().Point().Z // Forward/Back (positive = forward)
-
-	// Check if target is behind the camera
-	if z < 0 {
-		t.logger.Warnf("Target is behind camera (Z=%.1f). Cannot track.", z)
-		return 0, 0, 0
+	// 2. Calculate current direction from camera to target
+	currentDirection := r3.Vector{
+		X: targetPos.X - t.cameraPosition.X,
+		Y: targetPos.Y - t.cameraPosition.Y,
+		Z: targetPos.Z - t.cameraPosition.Z,
 	}
 
-	// Calculate distance for zoom
-	distance := math.Sqrt(x*x + y*y + z*z)
+	distance := currentDirection.Norm()
+	if distance < 1e-6 {
+		return errors.New("target too close to camera")
+	}
+	currentDirection = currentDirection.Mul(1.0 / distance)
 
-	// Calculate horizontal distance (in XZ plane) for tilt calculation
-	horizontalDist := math.Sqrt(x*x + z*z)
+	// 3. Calculate pan/tilt to point at this direction
+	pan, tilt := t.directionToPanTilt(currentDirection)
+	zoom := t.baselineZoomX
 
-	// Calculate angles in degrees
-	// Pan: rotation around vertical axis (positive = rotate right)
-	pan := math.Atan2(x, z) * 180.0 / math.Pi
+	t.logger.Debugf("Tracking: distance=%f, pan=%f, tilt=%f", distance, pan, tilt)
 
-	// Tilt: rotation around horizontal axis (positive = rotate up)
-	// Use horizontal distance to ensure tilt stays in valid range [-90, 90]
-	tilt := math.Atan2(y, horizontalDist) * 180.0 / math.Pi
-
-	t.logger.Infof("Distance: %.1fmm, Pan: %.1f°, Tilt: %.1f°", distance, pan, tilt)
-
-	// For relative-move tracking, we return angles in degrees and normalized zoom
-	// Pan and tilt represent how much the camera needs to rotate to point at the target
-
-	// Convert zoom to normalized coordinates based on distance
-	// Map distance range to zoom range (0.0 to 1.0)
-	var zoomNormalized float64
-	zoomNormalized = 1.0
-
-	return pan, tilt, zoomNormalized
+	// 4. Send absolute move command
+	return t.sendAbsoluteMove(ctx, pan, tilt, zoom)
 }
 
-/*
-Move the PTZ camera to the given pan, tilt, and zoom.
-From Viam RTSP PTZ documentation:
-Notes
-Disclaimer: This model was made in order to fully integrate with one specific camera. I tried to generalize it to all PTZ cameras, but your mileage may vary.
-Profile Discovery: Use get-profiles command to discover valid profile tokens
-Coordinate Spaces:
-Normalized: -1.0 to 1.0 (pan/tilt), 0.0-1.0 (zoom)
-Degrees: -180° to 180° (pan), -90° to 90° (tilt)
-Absolute Moves: Use normalized coordinates (-1.0 to 1.0 for pan/tilt, 0.0 to 1.0 for zoom).
-Relative Moves:
-Normalized (degrees: false): -1.0 to 1.0 (pan/tilt/zoom).
-Degrees (degrees: true): -180° to 180° (pan), -90° to 90° (tilt). Zoom remains normalized.
-Movement Speeds:
-Continuous: -1.0 (full reverse) to 1.0 (full forward).
-Relative/Absolute: Speed parameters (pan_speed, tilt_speed, zoom_speed between 0.0 and 1.0) are optional. If no speed parameters are provided, the camera uses its default speed. If any speed parameter is provided, the Speed element is included in the request (using defaults of 0.5 for Relative or 1.0 for Absolute for any unspecified speed components).
-*/
+// Convert world direction to PTZ pan/tilt values
+func (t *poseTracker) directionToPanTilt(direction r3.Vector) (pan, tilt float64) {
+	// Calculate the angular offset from baseline direction
 
-func (t *poseTracker) movePTZ(ctx context.Context, panError float64, tiltError float64, zoomNormalized float64) error {
-	// onvifPTZClientName := resource.NewName(generic.API, t.onvifPTZClientName)
-	// onvifPTZClient, err := t.robotClient.ResourceByName(onvifPTZClientName)
-	// if err != nil {
-	// 	return fmt.Errorf("failed to get onvif PTZ client: %w", err)
-	// }
+	// Decompose into horizontal (XY plane) and vertical components
+	// Horizontal angle (pan): project onto XY plane
+	baselineHorizontal := r3.Vector{
+		X: t.baselineDirection.X,
+		Y: t.baselineDirection.Y,
+		Z: 0,
+	}
+	currentHorizontal := r3.Vector{
+		X: direction.X,
+		Y: direction.Y,
+		Z: 0,
+	}
 
-	// Check if we're within deadband (target is centered)
+	// Normalize horizontal vectors
+	baselineHorizNorm := baselineHorizontal.Norm()
+	currentHorizNorm := currentHorizontal.Norm()
+
+	var panOffset float64
+	if baselineHorizNorm > 1e-6 && currentHorizNorm > 1e-6 {
+		baselineHorizontal = baselineHorizontal.Mul(1.0 / baselineHorizNorm)
+		currentHorizontal = currentHorizontal.Mul(1.0 / currentHorizNorm)
+
+		// Calculate angle between horizontal projections
+		// Use atan2 for signed angle
+		crossZ := baselineHorizontal.X*currentHorizontal.Y - baselineHorizontal.Y*currentHorizontal.X
+		dot := baselineHorizontal.Dot(currentHorizontal)
+		panOffset = math.Atan2(crossZ, dot)
+	}
+
+	// Vertical angle (tilt): elevation difference
+	baselineElevation := math.Asin(t.baselineDirection.Z)
+	currentElevation := math.Asin(direction.Z)
+	tiltOffset := currentElevation - baselineElevation
+
+	// Convert offsets to normalized coordinates
+	// Assuming ±180° pan range and ±90° tilt range
+	panNorm := panOffset / math.Pi         // radians to [-1, 1]
+	tiltNorm := tiltOffset / (math.Pi / 2) // radians to [-1, 1]
+
+	// Subtract from baseline
+	pan = t.baselinePan - panNorm
+	tilt = t.baselineTilt - tiltNorm
+
+	// Clamp to valid range
+	pan = math.Max(-1.0, math.Min(1.0, pan))
+	tilt = math.Max(-1.0, math.Min(1.0, tilt))
+
+	return pan, tilt
+}
+
+func (t *poseTracker) sendAbsoluteMove(ctx context.Context, pan float64, tilt float64, zoom float64) error {
+	onvifPTZClientName := resource.NewName(generic.API, t.onvifPTZClientName)
+	onvifPTZClient, err := t.robotClient.ResourceByName(onvifPTZClientName)
+	if err != nil {
+		return fmt.Errorf("failed to get onvif PTZ client: %w", err)
+	}
+	_, err = onvifPTZClient.DoCommand(ctx, map[string]interface{}{
+		"command":       "absolute-move",
+		"pan_position":  pan,
+		"tilt_position": tilt,
+		"zoom_position": zoom,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send absolute move: %w", err)
+	}
 	return nil
 }
