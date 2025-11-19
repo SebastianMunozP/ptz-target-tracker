@@ -278,57 +278,50 @@ func (t *poseTracker) alignCameraToTarget(ctx context.Context, targetPoseInCamer
 	// Now, we need to calculate the orientation of the camera such that its Z axis points towards the target position.
 	// This means that I want the camera pose to be such that its orientation is {ox:0, oy:0, oz:1}
 
-	// 3. Calculate vector from camera to target in world frame
-	direction := targetPosition.Sub(cameraPosition)
-	t.logger.Infof("Camera to target vector: %+v", direction)
-
-	// 4. Normalize
-	length := direction.Norm()
-	if length < 1e-6 {
-		t.logger.Errorf("Target too close to camera")
-		return nil, errors.New("target too close to camera")
+	direction := r3.Vector{
+		X: targetPosition.X - cameraPosition.X,
+		Y: targetPosition.Y - cameraPosition.Y,
+		Z: targetPosition.Z - cameraPosition.Z,
 	}
-	direction = direction.Mul(1.0 / length)
-	t.logger.Infof("Direction vector (normalized): (%f, %f, %f)", direction.X, direction.Y, direction.Z)
+	direction = direction.Mul(1.0 / direction.Norm())
 
-	// 5. We want camera's +Z axis to point along this direction
-	desiredZ := direction
-	defaultZ := r3.Vector{X: 0, Y: 0, Z: 1} // Camera's +Z in default orientation
 	t.logger.Infof("Direction to target: (%f, %f, %f)", direction.X, direction.Y, direction.Z)
 
-	// 6. Calculate rotation axis (perpendicular to both)
-	axis := defaultZ.Cross(desiredZ)
-	t.logger.Infof("Calculated axis: (%f, %f, %f)", axis.X, axis.Y, axis.Z)
+	// Build a rotation matrix where +Z points at target
+	// newZ = direction (this will be camera's +Z in world coords)
+	newZ := direction
 
-	// 7. Calculate rotation angle
-	angle := math.Acos(defaultZ.Dot(desiredZ))
-	t.logger.Infof("Calculated angle: %f°", angle*180/math.Pi)
+	// Choose newX perpendicular to newZ
+	// Use world Z-axis to define the "up" direction
+	worldUp := r3.Vector{X: 0, Y: 0, Z: 1}
+	newX := newZ.Cross(worldUp)
 
-	// Handle parallel/antiparallel cases
-	if axis.Norm() < 1e-6 {
-		if defaultZ.Dot(direction) > 0 {
-			// Already aligned
-			return spatialmath.NewOrientationVector(), nil
-		} else {
-			// 180° rotation
-			axis = r3.Vector{X: 1, Y: 0, Z: 0}
-			angle = math.Pi
-		}
+	// Handle case where newZ is parallel to world up
+	if newX.Norm() < 1e-6 {
+		// Direction is straight up or down, choose arbitrary X
+		newX = r3.Vector{X: 1, Y: 0, Z: 0}
 	} else {
-		axis = axis.Mul(1.0 / axis.Norm())
+		newX = newX.Mul(1.0 / newX.Norm())
 	}
 
-	ov := &spatialmath.OrientationVector{
-		Theta: angle, // Keep in radians for the internal representation
-		OX:    axis.X,
-		OY:    axis.Y,
-		OZ:    axis.Z,
+	// newY completes right-handed coordinate system
+	newY := newZ.Cross(newX)
+
+	// Create rotation matrix with these basis vectors as COLUMNS
+	// R = [newX | newY | newZ]
+	mat := []float64{
+		newX.X, newX.Y, newX.Z, // Row 1: newX
+		newY.X, newY.Y, newY.Z, // Row 2: newY
+		newZ.X, newZ.Y, newZ.Z, // Row 3: newZ
 	}
+	// Convert to orientation vector
+	rotmat, _ := spatialmath.NewRotationMatrix(mat)
+	ov := rotmat.OrientationVectorDegrees()
 
-	t.logger.Infof("Required camera orientation: axis=(%f, %f, %f), angle=%f°",
-		axis.X, axis.Y, axis.Z, angle*180/math.Pi)
+	t.logger.Infof("Orientation vector: axis=(%f, %f, %f), angle=%f°",
+		ov.OX, ov.OY, ov.OZ, ov.Theta)
 
-	return ov, nil
+	return (*spatialmath.OrientationVector)(ov.OrientationVectorDegrees()), nil
 }
 
 func (t *poseTracker) getCameraPose(ctx context.Context) *referenceframe.PoseInFrame {
