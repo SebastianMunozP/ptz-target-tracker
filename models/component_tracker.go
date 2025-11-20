@@ -1,4 +1,4 @@
-package ptztargettracker
+package models
 
 import (
 	"context"
@@ -20,14 +20,14 @@ import (
 )
 
 var (
-	PoseTracker      = resource.NewModel("viam", "ptz-target-tracker", "component-tracker")
+	ComponentTracker = resource.NewModel("viam", "ptz-target-tracker", "component-tracker")
 	errUnimplemented = errors.New("unimplemented")
 )
 
 func init() {
-	resource.RegisterService(genericservice.API, PoseTracker,
+	resource.RegisterService(genericservice.API, ComponentTracker,
 		resource.Registration[resource.Resource, *Config]{
-			Constructor: newPoseTracker,
+			Constructor: newComponentTracker,
 		},
 	)
 }
@@ -73,7 +73,7 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	return nil, nil, nil
 }
 
-type poseTracker struct {
+type componentTracker struct {
 	resource.AlwaysRebuild
 
 	name resource.Name
@@ -104,13 +104,13 @@ type poseTracker struct {
 }
 
 // Close implements resource.Resource.
-func (s *poseTracker) Close(ctx context.Context) error {
+func (s *componentTracker) Close(ctx context.Context) error {
 	panic("unimplemented")
 }
 
 // Reconfigure implements resource.Resource.
 // Subtle: this method shadows the method (AlwaysRebuild).Reconfigure of poseTracker.AlwaysRebuild.
-func (s *poseTracker) Reconfigure(ctx context.Context, deps resource.Dependencies, rawConf resource.Config) error {
+func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Dependencies, rawConf resource.Config) error {
 	conf, err := resource.NativeConfig[*Config](rawConf)
 	if err != nil {
 		return err
@@ -136,16 +136,16 @@ func (s *poseTracker) Reconfigure(ctx context.Context, deps resource.Dependencie
 	return nil
 }
 
-func newPoseTracker(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
+func newComponentTracker(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
 	conf, err := resource.NativeConfig[*Config](rawConf)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewPoseTracker(ctx, deps, rawConf.ResourceName(), conf, logger)
+	return NewComponentTracker(ctx, deps, rawConf.ResourceName(), conf, logger)
 }
 
-func NewPoseTracker(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (resource.Resource, error) {
+func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (resource.Resource, error) {
 
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
@@ -155,7 +155,7 @@ func NewPoseTracker(ctx context.Context, deps resource.Dependencies, name resour
 		return nil, fmt.Errorf("failed to connect to robot: %w", err)
 	}
 
-	s := &poseTracker{
+	s := &componentTracker{
 		name:                name,
 		logger:              logger,
 		cfg:                 conf,
@@ -172,17 +172,17 @@ func NewPoseTracker(ctx context.Context, deps resource.Dependencies, name resour
 
 	if conf.EnableOnStart {
 		go s.trackingLoop(s.cancelCtx)
-		s.logger.Info("PTZ pose tracker started")
+		s.logger.Info("PTZ component tracker started")
 	}
 
 	return s, nil
 }
 
-func (s *poseTracker) Name() resource.Name {
+func (s *componentTracker) Name() resource.Name {
 	return s.name
 }
 
-func (t *poseTracker) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	t.logger.Infof("DoCommand: %+v", cmd)
 	switch cmd["command"] {
 	case "start":
@@ -214,7 +214,7 @@ func (t *poseTracker) DoCommand(ctx context.Context, cmd map[string]interface{})
 }
 
 // Call this after calibration (camera pointing at target)
-func (t *poseTracker) recordBaseline(ctx context.Context) error {
+func (t *componentTracker) recordBaseline(ctx context.Context) error {
 	// 1. Get current PTZ position
 	panTiltX, panTiltY, zoomX, err := t.getCameraCurrentPTZStatus(ctx)
 	if err != nil {
@@ -245,7 +245,7 @@ func (t *poseTracker) recordBaseline(ctx context.Context) error {
 	return nil
 }
 
-func (t *poseTracker) getTargetPose(ctx context.Context) *referenceframe.PoseInFrame {
+func (t *componentTracker) getTargetPose(ctx context.Context) *referenceframe.PoseInFrame {
 	fsc, err := t.robotClient.FrameSystemConfig(ctx)
 	if err != nil {
 		t.logger.Error("Failed to get frame system config: %v", err)
@@ -265,7 +265,7 @@ func (t *poseTracker) getTargetPose(ctx context.Context) *referenceframe.PoseInF
 	return targetPose
 }
 
-func (t *poseTracker) getCameraCurrentPTZStatus(ctx context.Context) (float64, float64, float64, error) {
+func (t *componentTracker) getCameraCurrentPTZStatus(ctx context.Context) (float64, float64, float64, error) {
 	onvifPTZClientName := resource.NewName(generic.API, t.onvifPTZClientName)
 	onvifPTZClient, err := t.robotClient.ResourceByName(onvifPTZClientName)
 	if err != nil {
@@ -337,7 +337,7 @@ func (t *poseTracker) getCameraCurrentPTZStatus(ctx context.Context) (float64, f
 	return panTiltX, panTiltY, zoomX, nil
 }
 
-func (t *poseTracker) trackingLoop(ctx context.Context) {
+func (t *componentTracker) trackingLoop(ctx context.Context) {
 	t.logger.Info("Starting tracking loop")
 	t.logger.Info("Update rate: %f Hz", t.cfg.UpdateRateHz)
 	var updateInterval time.Duration = time.Duration(1.0 / t.cfg.UpdateRateHz * float64(time.Second))
@@ -359,7 +359,7 @@ func (t *poseTracker) trackingLoop(ctx context.Context) {
 }
 
 // Main tracking loop
-func (t *poseTracker) trackTarget(ctx context.Context) error {
+func (t *componentTracker) trackTarget(ctx context.Context) error {
 	// 1. Get target position in world frame
 	targetPose := t.getTargetPose(ctx)
 	targetPos := targetPose.Pose().Point()
@@ -388,7 +388,7 @@ func (t *poseTracker) trackTarget(ctx context.Context) error {
 }
 
 // Convert world direction to PTZ pan/tilt values
-func (t *poseTracker) directionToPanTilt(direction r3.Vector) (pan, tilt float64) {
+func (t *componentTracker) directionToPanTilt(direction r3.Vector) (pan, tilt float64) {
 	// Calculate the angular offset from baseline direction
 
 	// Decompose into horizontal (XY plane) and vertical components
@@ -441,7 +441,7 @@ func (t *poseTracker) directionToPanTilt(direction r3.Vector) (pan, tilt float64
 	return pan, tilt
 }
 
-func (t *poseTracker) sendAbsoluteMove(ctx context.Context, pan float64, tilt float64, zoom float64) error {
+func (t *componentTracker) sendAbsoluteMove(ctx context.Context, pan float64, tilt float64, zoom float64) error {
 	onvifPTZClientName := resource.NewName(generic.API, t.onvifPTZClientName)
 	onvifPTZClient, err := t.robotClient.ResourceByName(onvifPTZClientName)
 	if err != nil {

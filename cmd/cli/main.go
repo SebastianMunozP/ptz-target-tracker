@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	ptztargettracker "ptztargettracker"
+
+	"ptztargettracker/models"
 
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -23,7 +24,7 @@ func realMain() error {
 	deps := resource.Dependencies{}
 	// can load these from a remote machine if you need
 
-	cfg := ptztargettracker.Config{
+	cfg := models.Config{
 		TargetComponentName: "target_component_name",
 		PTZCameraName:       "ptz_camera",
 		OnvifPTZClientName:  "onvif-ptz-client",
@@ -31,7 +32,7 @@ func realMain() error {
 		EnableOnStart:       true,
 	}
 
-	thing, err := ptztargettracker.NewPoseTracker(ctx, deps, genericservice.Named("foo"), &cfg, logger)
+	thing, err := models.NewComponentTracker(ctx, deps, genericservice.Named("foo"), &cfg, logger)
 	if err != nil {
 		return err
 	}
