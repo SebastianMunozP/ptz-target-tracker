@@ -16,7 +16,6 @@ import (
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot"
 	genericservice "go.viam.com/rdk/services/generic"
-	"go.viam.com/rdk/spatialmath"
 )
 
 var (
@@ -107,22 +106,20 @@ type componentTracker struct {
 	targetComponentName string
 	onvifPTZClientName  string
 
-	baselinePan               float64
-	baselineTilt              float64
-	baselineZoomX             float64
-	baselineCameraOrientation *spatialmath.OrientationVectorDegrees
-	baselineDirection         r3.Vector // World direction at calibration
-	panSpeed                  float64
-	tiltSpeed                 float64
-	zoomSpeed                 float64
-	updateRateHz              float64
-	panMinDeg                 float64
-	panMaxDeg                 float64
-	tiltMinDeg                float64
-	tiltMaxDeg                float64
-
-	// Fixed camera position
-	cameraPosition r3.Vector // e.g., (1600, 0, -600)
+	baselinePan            float64
+	baselineTilt           float64
+	baselineZoomX          float64
+	baslineTargetPosition  r3.Vector
+	baselineCameraPosition r3.Vector
+	panSpeed               float64
+	tiltSpeed              float64
+	zoomSpeed              float64
+	updateRateHz           float64
+	panMinDeg              float64
+	panMaxDeg              float64
+	tiltMinDeg             float64
+	tiltMaxDeg             float64
+	reversePan             bool
 }
 
 // Close implements resource.Resource.
@@ -243,6 +240,13 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		}
 		t.baselineZoomX = zoom
 		return map[string]interface{}{"status": "success", "zoom": t.baselineZoomX}, nil
+	case "reverse-pan":
+		val, ok := cmd["value"].(bool)
+		if !ok {
+			return nil, fmt.Errorf("value is not a bool")
+		}
+		t.reversePan = val
+		return map[string]interface{}{"status": "success", "reversePan": t.reversePan}, nil
 	case "calibrate":
 		err := t.recordBaseline(t.cancelCtx)
 		if err != nil {
@@ -253,11 +257,121 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			"baselinePan":   t.baselinePan,
 			"baselineTilt":  t.baselineTilt,
 			"baselineZoomX": t.baselineZoomX,
-			"baselineDirection": map[string]interface{}{
-				"x": t.baselineDirection.X,
-				"y": t.baselineDirection.Y,
-				"z": t.baselineDirection.Z,
-			}}, nil
+			"baselineTargetPosition": map[string]interface{}{
+				"x": t.baslineTargetPosition.X,
+				"y": t.baslineTargetPosition.Y,
+				"z": t.baslineTargetPosition.Z,
+			},
+			"baselineCameraPosition": map[string]interface{}{
+				"x": t.baselineCameraPosition.X,
+				"y": t.baselineCameraPosition.Y,
+				"z": t.baselineCameraPosition.Z,
+			},
+		}, nil
+
+	case "get-calibration":
+		// Return calibration data in a format that can be saved and later loaded
+		return map[string]interface{}{
+			"status":        "success",
+			"baselinePan":   t.baselinePan,
+			"baselineTilt":  t.baselineTilt,
+			"baselineZoomX": t.baselineZoomX,
+			"baselineTargetPosition": map[string]interface{}{
+				"x": t.baslineTargetPosition.X,
+				"y": t.baslineTargetPosition.Y,
+				"z": t.baslineTargetPosition.Z,
+			},
+			"baselineCameraPosition": map[string]interface{}{
+				"x": t.baselineCameraPosition.X,
+				"y": t.baselineCameraPosition.Y,
+				"z": t.baselineCameraPosition.Z,
+			},
+		}, nil
+
+	case "load-calibration":
+		// Load calibration data from command parameters
+		baselinePan, ok := cmd["baselinePan"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselinePan is required and must be a float64")
+		}
+		baselineTilt, ok := cmd["baselineTilt"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselineTilt is required and must be a float64")
+		}
+		baselineZoomX, ok := cmd["baselineZoomX"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselineZoomX is required and must be a float64")
+		}
+
+		baselineTargetPosition, ok := cmd["baselineTargetPosition"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("baselineDirection is required and must be a map")
+		}
+
+		targetX, ok := baselineTargetPosition["x"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselineDirection.x is required and must be a float64")
+		}
+		targetY, ok := baselineTargetPosition["y"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselineDirection.y is required and must be a float64")
+		}
+		targetZ, ok := baselineTargetPosition["z"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselineDirection.z is required and must be a float64")
+		}
+
+		baselineCameraPosition, ok := cmd["baselineCameraPosition"].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("baselineCameraPosition is required and must be a map")
+		}
+
+		cameraX, ok := baselineCameraPosition["x"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselineCameraPosition.x is required and must be a float64")
+		}
+		cameraY, ok := baselineCameraPosition["y"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselineCameraPosition.y is required and must be a float64")
+		}
+		cameraZ, ok := baselineCameraPosition["z"].(float64)
+		if !ok {
+			return nil, fmt.Errorf("baselineCameraPosition.z is required and must be a float64")
+		}
+
+		cameraPosition := r3.Vector{X: cameraX, Y: cameraY, Z: cameraZ}
+
+		// Validate direction vector is normalized (or normalize it)
+		targetPosition := r3.Vector{X: targetX, Y: targetY, Z: targetZ}
+
+		// Load the calibration data
+		t.baselinePan = baselinePan
+		t.baselineTilt = baselineTilt
+		t.baselineZoomX = baselineZoomX
+		t.baslineTargetPosition = targetPosition
+		t.baselineCameraPosition = cameraPosition
+
+		t.logger.Infof("Loaded calibration: pan=%.3f, tilt=%.3f, zoom=%.3f, direction=(%.3f, %.3f, %.3f)",
+			t.baselinePan, t.baselineTilt, t.baselineZoomX,
+			t.baslineTargetPosition.X, t.baslineTargetPosition.Y, t.baslineTargetPosition.Z)
+
+		return map[string]interface{}{
+			"status":        "success",
+			"baselinePan":   t.baselinePan,
+			"baselineTilt":  t.baselineTilt,
+			"baselineZoomX": t.baselineZoomX,
+			"baselineTargetPosition": map[string]interface{}{
+				"x": t.baslineTargetPosition.X,
+				"y": t.baslineTargetPosition.Y,
+				"z": t.baslineTargetPosition.Z,
+			},
+			"baselineCameraPosition": map[string]interface{}{
+				"x": t.baselineCameraPosition.X,
+				"y": t.baselineCameraPosition.Y,
+				"z": t.baselineCameraPosition.Z,
+			},
+		}, nil
+
 	default:
 		return nil, fmt.Errorf("invalid command: %v", cmd["command"])
 	}
@@ -279,20 +393,46 @@ func (t *componentTracker) recordBaseline(ctx context.Context) error {
 	targetPose := t.getTargetPose(ctx)
 	targetPos := targetPose.Pose().Point()
 
-	// 3. Calculate baseline direction
-	t.baselineDirection = r3.Vector{
-		X: targetPos.X - t.cameraPosition.X,
-		Y: targetPos.Y - t.cameraPosition.Y,
-		Z: targetPos.Z - t.cameraPosition.Z,
-	}
-	t.baselineDirection = t.baselineDirection.Mul(1.0 / t.baselineDirection.Norm())
+	t.baslineTargetPosition = targetPos
 
+	cameraPose := t.getCameraPose(ctx)
+	if cameraPose == nil {
+		return errors.New("failed to get camera pose")
+	}
+	cameraPos := cameraPose.Pose().Point()
+
+	t.baselineCameraPosition = cameraPos
+
+	// 3. Calculate baseline direction
 	t.logger.Infof("Baseline calibration:")
 	t.logger.Infof("  Pan: %f, Tilt: %f", t.baselinePan, t.baselineTilt)
-	t.logger.Infof("  Direction: (%f, %f, %f)",
-		t.baselineDirection.X, t.baselineDirection.Y, t.baselineDirection.Z)
+	t.logger.Infof("  Target position: (%f, %f, %f)",
+		t.baslineTargetPosition.X, t.baslineTargetPosition.Y, t.baslineTargetPosition.Z)
+	t.logger.Infof("  Camera position: (%f, %f, %f)",
+		t.baselineCameraPosition.X, t.baselineCameraPosition.Y, t.baselineCameraPosition.Z)
 
 	return nil
+}
+
+func (t *componentTracker) getCameraPose(ctx context.Context) *referenceframe.PoseInFrame {
+
+	fsc, err := t.robotClient.FrameSystemConfig(ctx)
+	if err != nil {
+		t.logger.Error("Failed to get frame system config: %v", err)
+		return nil
+	}
+	cameraFramePart := touch.FindPart(fsc, t.cfg.PTZCameraName)
+	if cameraFramePart == nil {
+		t.logger.Errorf("can't find frame for %v", t.cfg.PTZCameraName)
+		return nil
+	}
+	cameraPose, err := t.robotClient.GetPose(ctx, cameraFramePart.FrameConfig.Name(), "", []*referenceframe.LinkInFrame{}, map[string]interface{}{})
+	if err != nil {
+		t.logger.Errorf("Failed to get pose: %v", err)
+		return nil
+	}
+
+	return cameraPose
 }
 
 func (t *componentTracker) getTargetPose(ctx context.Context) *referenceframe.PoseInFrame {
@@ -417,11 +557,20 @@ func (t *componentTracker) trackTarget(ctx context.Context) error {
 	targetPose := t.getTargetPose(ctx)
 	targetPos := targetPose.Pose().Point()
 
+	t.logger.Debugf("Target position: %+v", targetPos)
+
+	cameraPose := t.getCameraPose(ctx)
+	if cameraPose == nil {
+		return errors.New("failed to get camera pose")
+	}
+	cameraPos := cameraPose.Pose().Point()
+	t.logger.Debugf("Camera position: %+v", cameraPos)
+
 	// 2. Calculate current direction from camera to target
 	currentDirection := r3.Vector{
-		X: targetPos.X - t.cameraPosition.X,
-		Y: targetPos.Y - t.cameraPosition.Y,
-		Z: targetPos.Z - t.cameraPosition.Z,
+		X: targetPos.X - cameraPos.X,
+		Y: targetPos.Y - cameraPos.Y,
+		Z: targetPos.Z - cameraPos.Z,
 	}
 
 	distance := currentDirection.Norm()
@@ -431,7 +580,8 @@ func (t *componentTracker) trackTarget(ctx context.Context) error {
 	currentDirection = currentDirection.Mul(1.0 / distance)
 
 	// 3. Calculate pan/tilt to point at this direction
-	pan, tilt := t.directionToPanTilt(currentDirection)
+	// Pass current camera position so baseline direction can be recalculated dynamically
+	pan, tilt := t.directionToPanTilt(currentDirection, cameraPos)
 	zoom := t.baselineZoomX
 
 	t.logger.Debugf("Tracking: distance=%f, pan=%f, tilt=%f, zoom=%f", distance, pan, tilt, zoom)
@@ -441,14 +591,29 @@ func (t *componentTracker) trackTarget(ctx context.Context) error {
 }
 
 // Convert world direction to PTZ pan/tilt values
-func (t *componentTracker) directionToPanTilt(direction r3.Vector) (pan, tilt float64) {
+func (t *componentTracker) directionToPanTilt(direction r3.Vector, currentCameraPos r3.Vector) (pan, tilt float64) {
 	// Calculate the angular offset from baseline direction
+	// Recalculate baseline direction each iteration using current camera position
+	// This allows experimenting with moving the camera position dynamically
+
+	// Compute baseline direction vector from current camera position to baseline target position
+	baselineDirectionVec := r3.Vector{
+		X: t.baslineTargetPosition.X - currentCameraPos.X,
+		Y: t.baslineTargetPosition.Y - currentCameraPos.Y,
+		Z: t.baslineTargetPosition.Z - currentCameraPos.Z,
+	}
+	baselineDirNorm := baselineDirectionVec.Norm()
+	if baselineDirNorm < 1e-6 {
+		t.logger.Errorf("Baseline direction vector has zero length")
+		return t.baselinePan, t.baselineTilt
+	}
+	baselineDirectionVec = baselineDirectionVec.Mul(1.0 / baselineDirNorm)
 
 	// Decompose into horizontal (XY plane) and vertical components
 	// Horizontal angle (pan): project onto XY plane
 	baselineHorizontal := r3.Vector{
-		X: t.baselineDirection.X,
-		Y: t.baselineDirection.Y,
+		X: baselineDirectionVec.X,
+		Y: baselineDirectionVec.Y,
 		Z: 0,
 	}
 	currentHorizontal := r3.Vector{
@@ -476,7 +641,7 @@ func (t *componentTracker) directionToPanTilt(direction r3.Vector) (pan, tilt fl
 	}
 
 	// Vertical angle (tilt): elevation difference
-	baselineElevation := math.Asin(clampMinusOneToOne(t.baselineDirection.Z))
+	baselineElevation := math.Asin(clampMinusOneToOne(baselineDirectionVec.Z))
 	currentElevation := math.Asin(clampMinusOneToOne(direction.Z))
 	tiltOffset := currentElevation - baselineElevation
 
@@ -500,8 +665,19 @@ func (t *componentTracker) directionToPanTilt(direction r3.Vector) (pan, tilt fl
 	baselinePanDeg := normalizedToDegrees(t.baselinePan, panMinDeg, panMaxDeg)
 	baselineTiltDeg := normalizedToDegrees(t.baselineTilt, tiltMinDeg, tiltMaxDeg)
 
+	t.logger.Debugf("Pan calculation: baselinePanNorm=%.3f, baselinePanDeg=%.1f, panOffsetRad=%.3f, panOffsetDeg=%.1f",
+		t.baselinePan, baselinePanDeg, panOffset, panOffsetDeg)
+	t.logger.Debugf("Baseline direction: (%.3f, %.3f, %.3f), Current direction: (%.3f, %.3f, %.3f)",
+		direction.X, direction.Y, direction.Z,
+		direction.X, direction.Y, direction.Z)
+
 	// Apply offsets in degree space so we respect the asymmetric limits.
-	panDeg := baselinePanDeg - panOffsetDeg
+	var panDeg float64
+	if t.reversePan {
+		panDeg = baselinePanDeg + panOffsetDeg
+	} else {
+		panDeg = baselinePanDeg - panOffsetDeg
+	}
 	tiltDeg := baselineTiltDeg - tiltOffsetDeg
 
 	panDeg = clampFloat(panDeg, panMinDeg, panMaxDeg)
