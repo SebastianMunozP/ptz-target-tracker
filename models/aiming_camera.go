@@ -46,10 +46,10 @@ func (cfg *AimingCameraConfig) Validate(path string) ([]string, []string, error)
 	}
 	// Set defaults
 	if cfg.CrosshairSize == 0 {
-		cfg.CrosshairSize = 30
+		cfg.CrosshairSize = 100
 	}
 	if cfg.CrosshairThick == 0 {
-		cfg.CrosshairThick = 2
+		cfg.CrosshairThick = 20
 	}
 	if cfg.CrosshairColor == "" {
 		cfg.CrosshairColor = "red"
