@@ -35,18 +35,23 @@ func init() {
 }
 
 type Config struct {
-	TargetComponentName string  `json:"target_component_name"`
-	PTZCameraName       string  `json:"ptz_camera_name"`
-	OnvifPTZClientName  string  `json:"onvif_ptz_client_name"`
-	UpdateRateHz        float64 `json:"update_rate_hz"`
-	EnableOnStart       bool    `json:"enable_on_start"`
-	PanSpeed            float64 `json:"pan_speed"`
-	TiltSpeed           float64 `json:"tilt_speed"`
-	ZoomSpeed           float64 `json:"zoom_speed"`
-	PanMinDeg           float64 `json:"pan_min_deg"`
-	PanMaxDeg           float64 `json:"pan_max_deg"`
-	TiltMinDeg          float64 `json:"tilt_min_deg"`
-	TiltMaxDeg          float64 `json:"tilt_max_deg"`
+	TargetComponentName          string  `json:"target_component_name"`
+	PTZCameraName                string  `json:"ptz_camera_name"`
+	OnvifPTZClientName           string  `json:"onvif_ptz_client_name"`
+	UpdateRateHz                 float64 `json:"update_rate_hz"`
+	EnableOnStart                bool    `json:"enable_on_start"`
+	FixedZoomValue               float64 `json:"fixed_zoom_value"`
+	FixedPanSpeed                float64 `json:"fixed_pan_speed"`
+	FixedTiltSpeed               float64 `json:"fixed_tilt_speed"`
+	FixedZoomSpeed               float64 `json:"fixed_zoom_speed"`
+	PanMinSpeedDegreesPerSecond  float64 `json:"pan_min_speed_degrees_per_second"`
+	PanMaxSpeedDegreesPerSecond  float64 `json:"pan_max_speed_degrees_per_second"`
+	TiltMinSpeedDegreesPerSecond float64 `json:"tilt_min_speed_degrees_per_second"`
+	TiltMaxSpeedDegreesPerSecond float64 `json:"tilt_max_speed_degrees_per_second"`
+	PanMinDeg                    float64 `json:"pan_min_deg"`
+	PanMaxDeg                    float64 `json:"pan_max_deg"`
+	TiltMinDeg                   float64 `json:"tilt_min_deg"`
+	TiltMaxDeg                   float64 `json:"tilt_max_deg"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -67,14 +72,17 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.UpdateRateHz <= 0 {
 		return nil, nil, errors.New("update_rate_hz must be greater than 0")
 	}
-	if cfg.PanSpeed <= 0 || cfg.PanSpeed > 1 {
-		return nil, nil, errors.New("pan_speed must be greater than 0 and less than or equal to 1")
+	if cfg.FixedZoomValue <= 0 || cfg.FixedZoomValue > 1 {
+		return nil, nil, errors.New("fixed_zoom_value must be greater than 0 and less than or equal to 1")
 	}
-	if cfg.TiltSpeed <= 0 || cfg.TiltSpeed > 1 {
-		return nil, nil, errors.New("tilt_speed must be greater than 0 and less than or equal to 1")
+	if cfg.FixedPanSpeed < 0 || cfg.FixedPanSpeed > 1 {
+		return nil, nil, errors.New("fixed_pan_speed must be greater than or equal to 0 and less than or equal to 1")
 	}
-	if cfg.ZoomSpeed <= 0 || cfg.ZoomSpeed > 1 {
-		return nil, nil, errors.New("zoom_speed must be greater than 0 and less than or equal to 1")
+	if cfg.FixedTiltSpeed < 0 || cfg.FixedTiltSpeed > 1 {
+		return nil, nil, errors.New("fixed_tilt_speed must be greater than or equal to 0 and less than or equal to 1")
+	}
+	if cfg.FixedZoomSpeed < 0 || cfg.FixedZoomSpeed > 1 {
+		return nil, nil, errors.New("fixed_zoom_speed must be greater than or equal to 0 and less than or equal to 1")
 	}
 	if cfg.PanMinDeg == 0 && cfg.PanMaxDeg == 0 {
 		cfg.PanMinDeg = 0
@@ -90,6 +98,24 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.TiltMaxDeg <= cfg.TiltMinDeg {
 		return nil, nil, errors.New("tilt_max_deg must be greater than tilt_min_deg")
 	}
+	if cfg.PanMinSpeedDegreesPerSecond < 0 {
+		return nil, nil, errors.New("pan_min_speed_degrees_per_second must be greater than or equal to 0")
+	}
+	if cfg.TiltMinSpeedDegreesPerSecond < 0 {
+		return nil, nil, errors.New("tilt_min_speed_degrees_per_second must be greater than or equal to 0")
+	}
+	if cfg.PanMaxSpeedDegreesPerSecond < 0 {
+		return nil, nil, errors.New("pan_max_speed_degrees_per_second must be greater than or equal to 0")
+	}
+	if cfg.TiltMaxSpeedDegreesPerSecond < 0 {
+		return nil, nil, errors.New("tilt_max_speed_degrees_per_second must be greater than or equal to 0")
+	}
+	if cfg.PanMaxSpeedDegreesPerSecond < cfg.PanMinSpeedDegreesPerSecond {
+		return nil, nil, errors.New("pan_max_speed_degrees_per_second must be greater than pan_min_speed_degrees_per_second")
+	}
+	if cfg.TiltMaxSpeedDegreesPerSecond < cfg.TiltMinSpeedDegreesPerSecond {
+		return nil, nil, errors.New("tilt_max_speed_degrees_per_second must be greater than tilt_min_speed_degrees_per_second")
+	}
 	return nil, nil, nil
 }
 
@@ -101,11 +127,8 @@ type TrackingSample struct {
 }
 
 type Calibration struct {
-	PanCoeffs      [4]float64
-	TiltCoeffs     [4]float64
 	PanPolyCoeffs  [10]float64
 	TiltPolyCoeffs [10]float64
-	UsePolynomial  bool
 	IsCalibrated   bool
 }
 type componentTracker struct {
@@ -124,22 +147,37 @@ type componentTracker struct {
 	targetComponentName string
 	onvifPTZClientName  string
 
-	fixedZoomValue float64
-	panSpeed       float64
-	tiltSpeed      float64
-	zoomSpeed      float64
-	updateRateHz   float64
-	panMinDeg      float64
-	panMaxDeg      float64
-	tiltMinDeg     float64
-	tiltMaxDeg     float64
-	samples        []TrackingSample
-	calibration    Calibration
+	fixedZoomValue               float64
+	fixedPanSpeed                float64
+	fixedTiltSpeed               float64
+	fixedZoomSpeed               float64
+	updateRateHz                 float64
+	panMinDeg                    float64
+	panMaxDeg                    float64
+	tiltMinDeg                   float64
+	tiltMaxDeg                   float64
+	panMinSpeedDegreesPerSecond  float64
+	panMaxSpeedDegreesPerSecond  float64
+	tiltMinSpeedDegreesPerSecond float64
+	tiltMaxSpeedDegreesPerSecond float64
+	samples                      []TrackingSample
+	calibration                  Calibration
+	lastSentPan                  float64
+	lastSentTilt                 float64
+	lastSentZoom                 float64
 }
 
 // Close implements resource.Resource.
 func (s *componentTracker) Close(ctx context.Context) error {
-	panic("unimplemented")
+	s.logger.Debug("Closing component tracker")
+	// Stop tracking loop if running
+	if s.running {
+		s.running = false
+		if s.cancelFunc != nil {
+			s.cancelFunc()
+		}
+	}
+	return nil
 }
 
 // Reconfigure implements resource.Resource.
@@ -150,7 +188,7 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 		return err
 	}
 
-	s.logger.Infof("Reconfiguring pose tracker with pan speed: %f, tilt speed: %f, zoom speed: %f", conf.PanSpeed, conf.TiltSpeed, conf.ZoomSpeed)
+	s.logger.Infof("Reconfiguring pose tracker with pan speed: %f, tilt speed: %f, zoom speed: %f", conf.FixedPanSpeed, conf.FixedTiltSpeed, conf.FixedZoomSpeed)
 	wasRunning := s.running
 	if s.running {
 		s.cancelFunc()
@@ -159,9 +197,14 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	s.targetComponentName = conf.TargetComponentName
 	s.onvifPTZClientName = conf.OnvifPTZClientName
 	s.updateRateHz = conf.UpdateRateHz
-	s.panSpeed = conf.PanSpeed
-	s.tiltSpeed = conf.TiltSpeed
-	s.zoomSpeed = conf.ZoomSpeed
+	s.fixedZoomValue = conf.FixedZoomValue
+	s.fixedPanSpeed = conf.FixedPanSpeed
+	s.fixedTiltSpeed = conf.FixedTiltSpeed
+	s.fixedZoomSpeed = conf.FixedZoomSpeed
+	s.panMinSpeedDegreesPerSecond = conf.PanMinSpeedDegreesPerSecond
+	s.panMaxSpeedDegreesPerSecond = conf.PanMaxSpeedDegreesPerSecond
+	s.tiltMinSpeedDegreesPerSecond = conf.TiltMinSpeedDegreesPerSecond
+	s.tiltMaxSpeedDegreesPerSecond = conf.TiltMaxSpeedDegreesPerSecond
 	s.panMinDeg = conf.PanMinDeg
 	s.panMaxDeg = conf.PanMaxDeg
 	s.tiltMinDeg = conf.TiltMinDeg
@@ -194,22 +237,32 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 	}
 
 	s := &componentTracker{
-		name:                name,
-		logger:              logger,
-		cfg:                 conf,
-		cancelCtx:           cancelCtx,
-		cancelFunc:          cancelFunc,
-		robotClient:         robotClient,
-		targetComponentName: conf.TargetComponentName,
-		onvifPTZClientName:  conf.OnvifPTZClientName,
-		panSpeed:            conf.PanSpeed,
-		tiltSpeed:           conf.TiltSpeed,
-		zoomSpeed:           conf.ZoomSpeed,
-		updateRateHz:        conf.UpdateRateHz,
-		panMinDeg:           conf.PanMinDeg,
-		panMaxDeg:           conf.PanMaxDeg,
-		tiltMinDeg:          conf.TiltMinDeg,
-		tiltMaxDeg:          conf.TiltMaxDeg,
+		name:                         name,
+		logger:                       logger,
+		cfg:                          conf,
+		cancelCtx:                    cancelCtx,
+		cancelFunc:                   cancelFunc,
+		robotClient:                  robotClient,
+		targetComponentName:          conf.TargetComponentName,
+		onvifPTZClientName:           conf.OnvifPTZClientName,
+		fixedPanSpeed:                conf.FixedPanSpeed,
+		fixedTiltSpeed:               conf.FixedTiltSpeed,
+		fixedZoomSpeed:               conf.FixedZoomSpeed,
+		panMinSpeedDegreesPerSecond:  conf.PanMinSpeedDegreesPerSecond,
+		panMaxSpeedDegreesPerSecond:  conf.PanMaxSpeedDegreesPerSecond,
+		tiltMinSpeedDegreesPerSecond: conf.TiltMinSpeedDegreesPerSecond,
+		tiltMaxSpeedDegreesPerSecond: conf.TiltMaxSpeedDegreesPerSecond,
+		updateRateHz:                 conf.UpdateRateHz,
+		panMinDeg:                    conf.PanMinDeg,
+		panMaxDeg:                    conf.PanMaxDeg,
+		tiltMinDeg:                   conf.TiltMinDeg,
+		tiltMaxDeg:                   conf.TiltMaxDeg,
+		samples:                      nil,
+		calibration: Calibration{
+			PanPolyCoeffs:  [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			TiltPolyCoeffs: [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			IsCalibrated:   false,
+		},
 	}
 
 	if conf.EnableOnStart {
@@ -286,6 +339,7 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		t.logger.Infof("Sample %d: (%.1f, %.1f, %.1f) → pan=%.4f, tilt=%.4f",
 			len(t.samples), targetPos.X, targetPos.Y, targetPos.Z, pan, tilt)
 		lastSample := t.samples[len(t.samples)-1]
+		t.fitPolynomial()
 		return map[string]interface{}{
 			"sample_number": len(t.samples),
 			"target":        map[string]interface{}{"x": lastSample.TargetPos.X, "y": lastSample.TargetPos.Y, "z": lastSample.TargetPos.Z},
@@ -294,23 +348,92 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			"tag":           lastSample.Tag,
 		}, nil
 
-	case "get-samples":
+	case "get-calibration-samples":
 		return map[string]interface{}{
-			"samples": t.samples,
+			"calibration-samples": t.samples,
 		}, nil
-	case "load-samples":
-		samples, ok := cmd["samples"].([]TrackingSample)
+	case "load-calibration-samples":
+		samplesRaw, ok := cmd["calibration-samples"]
 		if !ok {
-			return nil, fmt.Errorf("samples is not a []TrackingSample")
+			return nil, fmt.Errorf("samples field is required")
 		}
-		t.samples = samples
+
+		samplesArray, ok := samplesRaw.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("samples must be an array")
+		}
+
+		var loadedSamples []TrackingSample
+		for i, sampleRaw := range samplesArray {
+			sampleMap, ok := sampleRaw.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("sample %d is not a map", i)
+			}
+
+			// Parse TargetPos
+			targetPosRaw, ok := sampleMap["TargetPos"]
+			if !ok {
+				return nil, fmt.Errorf("sample %d missing TargetPos", i)
+			}
+			targetPosMap, ok := targetPosRaw.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("sample %d TargetPos is not a map", i)
+			}
+
+			targetX, ok := targetPosMap["X"].(float64)
+			if !ok {
+				return nil, fmt.Errorf("sample %d TargetPos.X is not a float64", i)
+			}
+			targetY, ok := targetPosMap["Y"].(float64)
+			if !ok {
+				return nil, fmt.Errorf("sample %d TargetPos.Y is not a float64", i)
+			}
+			targetZ, ok := targetPosMap["Z"].(float64)
+			if !ok {
+				return nil, fmt.Errorf("sample %d TargetPos.Z is not a float64", i)
+			}
+
+			// Parse Pan
+			pan, ok := sampleMap["Pan"].(float64)
+			if !ok {
+				return nil, fmt.Errorf("sample %d Pan is not a float64", i)
+			}
+
+			// Parse Tilt
+			tilt, ok := sampleMap["Tilt"].(float64)
+			if !ok {
+				return nil, fmt.Errorf("sample %d Tilt is not a float64", i)
+			}
+
+			// Parse Tag (optional)
+			tag := "manual"
+			if tagRaw, ok := sampleMap["Tag"]; ok {
+				if tagStr, ok := tagRaw.(string); ok {
+					tag = tagStr
+				}
+			}
+
+			sample := TrackingSample{
+				TargetPos: r3.Vector{X: targetX, Y: targetY, Z: targetZ},
+				Pan:       pan,
+				Tilt:      tilt,
+				Tag:       tag,
+			}
+			loadedSamples = append(loadedSamples, sample)
+		}
+
+		t.samples = loadedSamples
+		t.logger.Infof("Loaded %d samples", len(t.samples))
+
+		t.fitPolynomial()
+
 		return map[string]interface{}{
 			"status":  "success",
 			"samples": len(t.samples),
 		}, nil
 
-	case "save-samples-to-file":
-		filename := "samples.json"
+	case "save-calibration-samples-to-file":
+		filename := "calibration-samples.json"
 		if cmd["filename"] != nil {
 			filename = cmd["filename"].(string)
 		}
@@ -322,8 +445,8 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			"status":   "success",
 			"filename": filename,
 		}, nil
-	case "load-samples-from-file":
-		filename := "samples.json"
+	case "load-calibration-samples-from-file":
+		filename := "calibration-samples.json"
 		if cmd["filename"] != nil {
 			filename = cmd["filename"].(string)
 		}
@@ -332,43 +455,49 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			return nil, err
 		}
 		t.samples = samples
+		t.fitPolynomial()
 		return map[string]interface{}{
 			"status":   "success",
 			"filename": filename,
 			"samples":  len(t.samples),
 		}, nil
 
-	case "clear-samples":
+	case "clear-calibration-samples":
 		t.samples = nil
 		t.calibration.IsCalibrated = false
 		return map[string]interface{}{"status": "cleared"}, nil
 
-	case "fit-linear":
-		if len(t.samples) < 4 {
-			return nil, fmt.Errorf("need at least 4 samples, have %d", len(t.samples))
+	case "remove-calibration-sample":
+		index, ok := cmd["index"].(int)
+		if !ok {
+			return nil, fmt.Errorf("index is not an int")
 		}
+		if index < 0 || index >= len(t.samples) {
+			return nil, fmt.Errorf("index out of range")
+		}
+		t.samples = append(t.samples[:index], t.samples[index+1:]...)
+		t.fitPolynomial()
+		return map[string]interface{}{"status": "removed", "index": index}, nil
 
-		panErr, tiltErr := t.fitLinear()
-		t.calibration.UsePolynomial = false
-		t.calibration.IsCalibrated = true
+	case "remove-last-calibration-sample":
+		if len(t.samples) == 0 {
+			return nil, fmt.Errorf("no samples to remove")
+		}
+		t.samples = t.samples[:len(t.samples)-1]
+		t.fitPolynomial()
+		return map[string]interface{}{"status": "removed", "index": len(t.samples)}, nil
 
-		return map[string]interface{}{
-			"status":         "success",
-			"pan_coeffs":     []float64{t.calibration.PanCoeffs[0], t.calibration.PanCoeffs[1], t.calibration.PanCoeffs[2], t.calibration.PanCoeffs[3]},
-			"tilt_coeffs":    []float64{t.calibration.TiltCoeffs[0], t.calibration.TiltCoeffs[1], t.calibration.TiltCoeffs[2], t.calibration.TiltCoeffs[3]},
-			"pan_error_avg":  panErr,
-			"tilt_error_avg": tiltErr,
-			"samples_used":   len(t.samples),
-		}, nil
+	case "clear-calibration":
+		t.calibration.IsCalibrated = false
+		t.fitPolynomial()
+		return map[string]interface{}{"status": "cleared"}, nil
 
-	case "fit-polynomial":
+	case "fit-polynomial-calibration":
 		if len(t.samples) < 10 {
 			return nil, fmt.Errorf("need at least 10 samples for polynomial fit, have %d", len(t.samples))
 		}
 
 		panErr, tiltErr := t.fitPolynomial()
-		t.calibration.UsePolynomial = true
-		t.calibration.IsCalibrated = true
 
 		return map[string]interface{}{
 			"status":         "success",
@@ -380,21 +509,10 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		return map[string]interface{}{
 			"status":           "success",
 			"is_calibrated":    t.calibration.IsCalibrated,
-			"use_polynomial":   t.calibration.UsePolynomial,
-			"pan_coeffs":       []float64{t.calibration.PanCoeffs[0], t.calibration.PanCoeffs[1], t.calibration.PanCoeffs[2], t.calibration.PanCoeffs[3]},
-			"tilt_coeffs":      []float64{t.calibration.TiltCoeffs[0], t.calibration.TiltCoeffs[1], t.calibration.TiltCoeffs[2], t.calibration.TiltCoeffs[3]},
 			"pan_poly_coeffs":  []float64{t.calibration.PanPolyCoeffs[0], t.calibration.PanPolyCoeffs[1], t.calibration.PanPolyCoeffs[2], t.calibration.PanPolyCoeffs[3], t.calibration.PanPolyCoeffs[4], t.calibration.PanPolyCoeffs[5], t.calibration.PanPolyCoeffs[6], t.calibration.PanPolyCoeffs[7], t.calibration.PanPolyCoeffs[8], t.calibration.PanPolyCoeffs[9]},
 			"tilt_poly_coeffs": []float64{t.calibration.TiltPolyCoeffs[0], t.calibration.TiltPolyCoeffs[1], t.calibration.TiltPolyCoeffs[2], t.calibration.TiltPolyCoeffs[3], t.calibration.TiltPolyCoeffs[4], t.calibration.TiltPolyCoeffs[5], t.calibration.TiltPolyCoeffs[6], t.calibration.TiltPolyCoeffs[7], t.calibration.TiltPolyCoeffs[8], t.calibration.TiltPolyCoeffs[9]},
 		}, nil
 	case "load-calibration":
-		panCoeffs, ok := cmd["pan_coeffs"].([]float64)
-		if !ok {
-			return nil, fmt.Errorf("pan_coeffs is not a []float64")
-		}
-		tiltCoeffs, ok := cmd["tilt_coeffs"].([]float64)
-		if !ok {
-			return nil, fmt.Errorf("tilt_coeffs is not a []float64")
-		}
 		panPolyCoeffs, ok := cmd["pan_poly_coeffs"].([]float64)
 		if !ok {
 			return nil, fmt.Errorf("pan_poly_coeffs is not a []float64")
@@ -403,12 +521,9 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		if !ok {
 			return nil, fmt.Errorf("tilt_poly_coeffs is not a []float64")
 		}
-		if len(panCoeffs) != 4 || len(tiltCoeffs) != 4 || len(panPolyCoeffs) != 10 || len(tiltPolyCoeffs) != 10 {
-			return nil, fmt.Errorf("pan_coeffs, tilt_coeffs, pan_poly_coeffs, and tilt_poly_coeffs must be 4 and 10 respectively")
+		if len(panPolyCoeffs) != 10 || len(tiltPolyCoeffs) != 10 {
+			return nil, fmt.Errorf("pan_poly_coeffs and tilt_poly_coeffs must be 10")
 		}
-		t.calibration.UsePolynomial = cmd["use_polynomial"].(bool)
-		t.calibration.PanCoeffs = [4]float64{panCoeffs[0], panCoeffs[1], panCoeffs[2], panCoeffs[3]}
-		t.calibration.TiltCoeffs = [4]float64{tiltCoeffs[0], tiltCoeffs[1], tiltCoeffs[2], tiltCoeffs[3]}
 		t.calibration.PanPolyCoeffs = [10]float64{panPolyCoeffs[0], panPolyCoeffs[1], panPolyCoeffs[2], panPolyCoeffs[3], panPolyCoeffs[4], panPolyCoeffs[5], panPolyCoeffs[6], panPolyCoeffs[7], panPolyCoeffs[8], panPolyCoeffs[9]}
 		t.calibration.TiltPolyCoeffs = [10]float64{tiltPolyCoeffs[0], tiltPolyCoeffs[1], tiltPolyCoeffs[2], tiltPolyCoeffs[3], tiltPolyCoeffs[4], tiltPolyCoeffs[5], tiltPolyCoeffs[6], tiltPolyCoeffs[7], tiltPolyCoeffs[8], tiltPolyCoeffs[9]}
 		t.calibration.IsCalibrated = true
@@ -427,10 +542,7 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		return map[string]interface{}{
 			"status":           "success",
 			"filename":         filename,
-			"use_polynomial":   t.calibration.UsePolynomial,
 			"is_calibrated":    t.calibration.IsCalibrated,
-			"pan_coeffs":       []float64{t.calibration.PanCoeffs[0], t.calibration.PanCoeffs[1], t.calibration.PanCoeffs[2], t.calibration.PanCoeffs[3]},
-			"tilt_coeffs":      []float64{t.calibration.TiltCoeffs[0], t.calibration.TiltCoeffs[1], t.calibration.TiltCoeffs[2], t.calibration.TiltCoeffs[3]},
 			"pan_poly_coeffs":  []float64{t.calibration.PanPolyCoeffs[0], t.calibration.PanPolyCoeffs[1], t.calibration.PanPolyCoeffs[2], t.calibration.PanPolyCoeffs[3], t.calibration.PanPolyCoeffs[4], t.calibration.PanPolyCoeffs[5], t.calibration.PanPolyCoeffs[6], t.calibration.PanPolyCoeffs[7], t.calibration.PanPolyCoeffs[8], t.calibration.PanPolyCoeffs[9]},
 			"tilt_poly_coeffs": []float64{t.calibration.TiltPolyCoeffs[0], t.calibration.TiltPolyCoeffs[1], t.calibration.TiltPolyCoeffs[2], t.calibration.TiltPolyCoeffs[3], t.calibration.TiltPolyCoeffs[4], t.calibration.TiltPolyCoeffs[5], t.calibration.TiltPolyCoeffs[6], t.calibration.TiltPolyCoeffs[7], t.calibration.TiltPolyCoeffs[8], t.calibration.TiltPolyCoeffs[9]},
 		}, nil
@@ -446,11 +558,8 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		return map[string]interface{}{
 			"status":           "success",
 			"filename":         filename,
-			"pan_coeffs":       []float64{t.calibration.PanCoeffs[0], t.calibration.PanCoeffs[1], t.calibration.PanCoeffs[2], t.calibration.PanCoeffs[3]},
-			"tilt_coeffs":      []float64{t.calibration.TiltCoeffs[0], t.calibration.TiltCoeffs[1], t.calibration.TiltCoeffs[2], t.calibration.TiltCoeffs[3]},
 			"pan_poly_coeffs":  []float64{t.calibration.PanPolyCoeffs[0], t.calibration.PanPolyCoeffs[1], t.calibration.PanPolyCoeffs[2], t.calibration.PanPolyCoeffs[3], t.calibration.PanPolyCoeffs[4], t.calibration.PanPolyCoeffs[5], t.calibration.PanPolyCoeffs[6], t.calibration.PanPolyCoeffs[7], t.calibration.PanPolyCoeffs[8], t.calibration.PanPolyCoeffs[9]},
 			"tilt_poly_coeffs": []float64{t.calibration.TiltPolyCoeffs[0], t.calibration.TiltPolyCoeffs[1], t.calibration.TiltPolyCoeffs[2], t.calibration.TiltPolyCoeffs[3], t.calibration.TiltPolyCoeffs[4], t.calibration.TiltPolyCoeffs[5], t.calibration.TiltPolyCoeffs[6], t.calibration.TiltPolyCoeffs[7], t.calibration.TiltPolyCoeffs[8], t.calibration.TiltPolyCoeffs[9]},
-			"use_polynomial":   t.calibration.UsePolynomial,
 			"is_calibrated":    t.calibration.IsCalibrated,
 		}, nil
 
@@ -544,20 +653,18 @@ func (t *componentTracker) getCameraCurrentPTZStatus(ctx context.Context) (float
 	movePanTilt, ok := moveStatus["pan_tilt"].(string)
 	if !ok {
 		t.logger.Errorf("PTZ move pan tilt is not a string")
-		return 0, 0, 0, err
+		return 0, 0, 0, fmt.Errorf("PTZ move pan tilt is not a string")
 	}
 	if movePanTilt != "IDLE" {
-		t.logger.Errorf("PTZ is not idle")
-		return 0, 0, 0, err
+		t.logger.Debugf("PTZ pan/tilt is moving (status: %s), reading position anyway", movePanTilt)
 	}
 	moveZoom, ok := moveStatus["zoom"].(string)
 	if !ok {
 		t.logger.Errorf("PTZ move zoom is not a string")
-		return 0, 0, 0, err
+		return 0, 0, 0, fmt.Errorf("PTZ move zoom is not a string")
 	}
 	if moveZoom != "IDLE" {
-		t.logger.Errorf("PTZ is not idle")
-		return 0, 0, 0, err
+		t.logger.Debugf("PTZ zoom is moving (status: %s), reading position anyway", moveZoom)
 	}
 	position, ok := ptzStatusResponse["position"].(map[string]interface{})
 	if !ok {
@@ -624,122 +731,149 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, pan float64, ti
 	if err != nil {
 		return fmt.Errorf("failed to get onvif PTZ client: %w", err)
 	}
+
+	panSpeed := t.fixedPanSpeed
+	tiltSpeed := t.fixedTiltSpeed
+	zoomSpeed := t.fixedZoomSpeed
+
+	currentPan, currentTilt, _, err := t.getCameraCurrentPTZStatus(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get current PTZ status: %w", err)
+	}
+
+	// Check if we're sending the same absolute position as last time (idempotent check)
+	panDeltaFromLastSent := math.Abs(pan - t.lastSentPan)
+	tiltDeltaFromLastSent := math.Abs(tilt - t.lastSentTilt)
+	zoomDeltaFromLastSent := math.Abs(zoom - t.lastSentZoom)
+
+	// Threshold: skip move if we're sending the same absolute position (< 0.001 normalized)
+	const samePositionThresholdNormalized = 0.001
+
+	if panDeltaFromLastSent < samePositionThresholdNormalized &&
+		tiltDeltaFromLastSent < samePositionThresholdNormalized &&
+		zoomDeltaFromLastSent < samePositionThresholdNormalized {
+		t.logger.Debugf("Skipping move - same absolute position as last sent: pan=%.3f, tilt=%.3f, zoom=%.3f", pan, tilt, zoom)
+		return nil
+	}
+
+	// Calculate deltas to current position for speed calculation
+	panDeltaNormalized := math.Abs(pan - currentPan)
+	tiltDeltaNormalized := math.Abs(tilt - currentTilt)
+
+	// Threshold: skip move if delta to current position is very small (< 0.001 normalized)
+	const moveThresholdNormalized = 0.001
+
+	if panDeltaNormalized < moveThresholdNormalized && tiltDeltaNormalized < moveThresholdNormalized {
+		t.logger.Debugf("Skipping move - already at target: pan=%.3f (delta=%.4f), tilt=%.3f (delta=%.4f)", pan, panDeltaNormalized, tilt, tiltDeltaNormalized)
+		// Update last sent position even though we skipped
+		t.lastSentPan = pan
+		t.lastSentTilt = tilt
+		t.lastSentZoom = zoom
+		return nil
+	}
+
+	// Variables to store speed calculation details for logging
+	var panDeltaDegrees, panRequiredSpeedDegreesPerSecond float64
+	var tiltDeltaDegrees, tiltRequiredSpeedDegreesPerSecond float64
+
+	if panSpeed == 0 {
+		// Calculate speed based on required angle change and available time
+		// panDeltaNormalized already calculated above
+		// 2. Convert to degrees: normalized [-1, 1] maps to [panMinDeg, panMaxDeg]
+		panRangeDegrees := t.panMaxDeg - t.panMinDeg
+		panDeltaDegrees = panDeltaNormalized * panRangeDegrees / 2.0
+		// 3. Calculate time available (period between updates)
+		timeAvailableSeconds := 1.0 / t.updateRateHz
+		// 4. Calculate required speed in degrees/second
+		panRequiredSpeedDegreesPerSecond = panDeltaDegrees / timeAvailableSeconds
+		// 5. Map to normalized speed [0, 1] based on min/max speed configuration
+		// If required speed is less than min, use min. If greater than max, use max (clamped to 1.0)
+		if panRequiredSpeedDegreesPerSecond <= t.panMinSpeedDegreesPerSecond {
+			panSpeed = 0.0
+		} else if panRequiredSpeedDegreesPerSecond >= t.panMaxSpeedDegreesPerSecond {
+			panSpeed = 1.0
+		} else {
+			// Linear interpolation between min and max speeds
+			speedRange := t.panMaxSpeedDegreesPerSecond - t.panMinSpeedDegreesPerSecond
+			if speedRange > 0 {
+				panSpeed = (panRequiredSpeedDegreesPerSecond - t.panMinSpeedDegreesPerSecond) / speedRange
+			} else {
+				panSpeed = 0.0
+			}
+		}
+		// Clamp to [0.0, 1.0] as ONVIF expects normalized speeds
+		panSpeed = math.Max(0.0, math.Min(1.0, panSpeed))
+	}
+	if tiltSpeed == 0 {
+		// Calculate speed based on required angle change and available time
+		// tiltDeltaNormalized already calculated above
+		// 2. Convert to degrees: normalized [-1, 1] maps to [tiltMinDeg, tiltMaxDeg]
+		tiltRangeDegrees := t.tiltMaxDeg - t.tiltMinDeg
+		tiltDeltaDegrees = tiltDeltaNormalized * tiltRangeDegrees / 2.0
+		// 3. Calculate time available (period between updates)
+		timeAvailableSeconds := 1.0 / t.updateRateHz
+		// 4. Calculate required speed in degrees/second
+		tiltRequiredSpeedDegreesPerSecond = tiltDeltaDegrees / timeAvailableSeconds
+		// 5. Map to normalized speed [0, 1] based on min/max speed configuration
+		if tiltRequiredSpeedDegreesPerSecond <= t.tiltMinSpeedDegreesPerSecond {
+			tiltSpeed = 0.0
+		} else if tiltRequiredSpeedDegreesPerSecond >= t.tiltMaxSpeedDegreesPerSecond {
+			tiltSpeed = 1.0
+		} else {
+			// Linear interpolation between min and max speeds
+			speedRange := t.tiltMaxSpeedDegreesPerSecond - t.tiltMinSpeedDegreesPerSecond
+			if speedRange > 0 {
+				tiltSpeed = (tiltRequiredSpeedDegreesPerSecond - t.tiltMinSpeedDegreesPerSecond) / speedRange
+			} else {
+				tiltSpeed = 0.0
+			}
+		}
+		// Clamp to [0.0, 1.0] as ONVIF expects normalized speeds
+		tiltSpeed = math.Max(0.0, math.Min(1.0, tiltSpeed))
+	}
+	// Ensure zoom speed is also clamped
+	zoomSpeed = math.Max(0.0, math.Min(1.0, zoomSpeed))
+
+	// Skip move if both pan and tilt speeds are effectively zero (very small movements)
+	// Threshold of 0.01 means we skip movements requiring less than 1% of max speed
+	// Also skip if the maximum of pan/tilt speeds is very small (< 0.02)
+	const minEffectiveSpeed = 0.01
+	const minMaxSpeed = 0.02
+	maxSpeed := math.Max(panSpeed, tiltSpeed)
+	if (panSpeed < minEffectiveSpeed && tiltSpeed < minEffectiveSpeed || maxSpeed < minMaxSpeed) &&
+		math.Abs(zoom-t.lastSentZoom) < samePositionThresholdNormalized {
+		t.logger.Debugf("Sending absolute move: Skipping move - speeds too small: pan_speed=%.4f, tilt_speed=%.4f, max_speed=%.4f", panSpeed, tiltSpeed, maxSpeed)
+		// Update last sent position even though we skipped
+		t.lastSentPan = pan
+		t.lastSentTilt = tilt
+		t.lastSentZoom = zoom
+		return nil
+	}
+
+	// Comprehensive debug log with all information
+	t.logger.Debugf("Sending absolute move: target pan=%.3f (current=%.3f, delta=%.4f norm/%.2f deg, req_speed=%.2f deg/s, speed_range=[%.2f,%.2f] deg/s, norm_speed=%.3f), target tilt=%.3f (current=%.3f, delta=%.4f norm/%.2f deg, req_speed=%.2f deg/s, speed_range=[%.2f,%.2f] deg/s, norm_speed=%.3f), zoom=%.3f, speeds: pan=%.3f tilt=%.3f zoom=%.3f",
+		pan, currentPan, panDeltaNormalized, panDeltaDegrees, panRequiredSpeedDegreesPerSecond, t.panMinSpeedDegreesPerSecond, t.panMaxSpeedDegreesPerSecond, panSpeed,
+		tilt, currentTilt, tiltDeltaNormalized, tiltDeltaDegrees, tiltRequiredSpeedDegreesPerSecond, t.tiltMinSpeedDegreesPerSecond, t.tiltMaxSpeedDegreesPerSecond, tiltSpeed,
+		zoom, panSpeed, tiltSpeed, zoomSpeed)
 	_, err = onvifPTZClient.DoCommand(ctx, map[string]interface{}{
 		"command":       "absolute-move",
 		"pan_position":  pan,
 		"tilt_position": tilt,
 		"zoom_position": zoom,
-		"pan_speed":     t.panSpeed,
-		"tilt_speed":    t.tiltSpeed,
-		"zoom_speed":    t.zoomSpeed,
+		"pan_speed":     panSpeed,
+		"tilt_speed":    tiltSpeed,
+		"zoom_speed":    zoomSpeed,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to send absolute move: %w", err)
 	}
+
+	// Update last sent positions (absolute positions are idempotent)
+	t.lastSentPan = pan
+	t.lastSentTilt = tilt
+	t.lastSentZoom = zoom
+
 	return nil
-}
-
-// Fit: pan = Ax + By + Cz + D
-func (t *componentTracker) fitLinear() (panError, tiltError float64) {
-	n := len(t.samples)
-
-	// Build matrices for least squares: X * coeffs = Y
-	// X is n x 4 matrix: [x, y, z, 1]
-	// Y is n x 1 vector: [pan] or [tilt]
-
-	t.calibration.PanCoeffs = t.fitLinearSingle(func(s TrackingSample) float64 { return s.Pan })
-	t.calibration.TiltCoeffs = t.fitLinearSingle(func(s TrackingSample) float64 { return s.Tilt })
-
-	// Calculate errors
-	var panErrSum, tiltErrSum float64
-	for _, s := range t.samples {
-		predPan, predTilt := t.predictPanTiltLinear(s.TargetPos)
-		panErrSum += math.Abs(predPan - s.Pan)
-		tiltErrSum += math.Abs(predTilt - s.Tilt)
-	}
-
-	panError = panErrSum / float64(n)
-	tiltError = tiltErrSum / float64(n)
-
-	t.logger.Infof("Linear fit complete:")
-	t.logger.Infof("  Pan:  %.6f*x + %.6f*y + %.6f*z + %.6f",
-		t.calibration.PanCoeffs[0], t.calibration.PanCoeffs[1], t.calibration.PanCoeffs[2], t.calibration.PanCoeffs[3])
-	t.logger.Infof("  Tilt: %.6f*x + %.6f*y + %.6f*z + %.6f",
-		t.calibration.TiltCoeffs[0], t.calibration.TiltCoeffs[1], t.calibration.TiltCoeffs[2], t.calibration.TiltCoeffs[3])
-	t.logger.Infof("  Avg error: pan=%.5f, tilt=%.5f", panError, tiltError)
-
-	return panError, tiltError
-}
-
-func (t *componentTracker) fitLinearSingle(getValue func(TrackingSample) float64) [4]float64 {
-	// Normal equations: (X^T * X) * coeffs = X^T * Y
-	// Build X^T * X (4x4) and X^T * Y (4x1)
-	var XtX [4][4]float64
-	var XtY [4]float64
-
-	for _, s := range t.samples {
-		x := [4]float64{s.TargetPos.X, s.TargetPos.Y, s.TargetPos.Z, 1}
-		y := getValue(s)
-
-		for i := 0; i < 4; i++ {
-			XtY[i] += x[i] * y
-			for j := 0; j < 4; j++ {
-				XtX[i][j] += x[i] * x[j]
-			}
-		}
-	}
-
-	// Solve 4x4 system using Gaussian elimination
-	return solveLinearSystem4x4(XtX, XtY)
-}
-
-func solveLinearSystem4x4(A [4][4]float64, b [4]float64) [4]float64 {
-	// Gaussian elimination with partial pivoting
-	var aug [4][5]float64
-	for i := 0; i < 4; i++ {
-		for j := 0; j < 4; j++ {
-			aug[i][j] = A[i][j]
-		}
-		aug[i][4] = b[i]
-	}
-
-	// Forward elimination
-	for col := 0; col < 4; col++ {
-		// Find pivot
-		maxRow := col
-		for row := col + 1; row < 4; row++ {
-			if math.Abs(aug[row][col]) > math.Abs(aug[maxRow][col]) {
-				maxRow = row
-			}
-		}
-		aug[col], aug[maxRow] = aug[maxRow], aug[col]
-
-		if math.Abs(aug[col][col]) < 1e-10 {
-			continue // Singular
-		}
-
-		// Eliminate below
-		for row := col + 1; row < 4; row++ {
-			factor := aug[row][col] / aug[col][col]
-			for j := col; j < 5; j++ {
-				aug[row][j] -= factor * aug[col][j]
-			}
-		}
-	}
-
-	// Back substitution
-	var result [4]float64
-	for i := 3; i >= 0; i-- {
-		result[i] = aug[i][4]
-		for j := i + 1; j < 4; j++ {
-			result[i] -= aug[i][j] * result[j]
-		}
-		if math.Abs(aug[i][i]) > 1e-10 {
-			result[i] /= aug[i][i]
-		}
-	}
-
-	return result
 }
 
 // Fit: pan = Ax² + By² + Cz² + Dxy + Exz + Fyz + Gx + Hy + Iz + J
@@ -761,6 +895,7 @@ func (t *componentTracker) fitPolynomial() (panError, tiltError float64) {
 
 	t.logger.Infof("Polynomial fit complete: avg error pan=%.5f, tilt=%.5f", panError, tiltError)
 
+	t.calibration.IsCalibrated = true
 	return panError, tiltError
 }
 
@@ -841,22 +976,13 @@ func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt fl
 	return pan, tilt
 }
 
-func (t *componentTracker) predictPanTiltLinear(pos r3.Vector) (pan, tilt float64) {
-	pan = t.calibration.PanCoeffs[0]*pos.X + t.calibration.PanCoeffs[1]*pos.Y + t.calibration.PanCoeffs[2]*pos.Z + t.calibration.PanCoeffs[3]
-	tilt = t.calibration.TiltCoeffs[0]*pos.X + t.calibration.TiltCoeffs[1]*pos.Y + t.calibration.TiltCoeffs[2]*pos.Z + t.calibration.TiltCoeffs[3]
-	return pan, tilt
-}
-
 func (t *componentTracker) predictPanTilt(pos r3.Vector) (pan, tilt float64) {
-	if t.calibration.UsePolynomial {
-		return t.predictPanTiltPolynomial(pos)
-	}
-	return t.predictPanTiltLinear(pos)
+	return t.predictPanTiltPolynomial(pos)
 }
 
 func (t *componentTracker) trackTarget(ctx context.Context) error {
 	if !t.calibration.IsCalibrated {
-		return errors.New("not calibrated - run fit-linear or fit-polynomial first")
+		return errors.New("not calibrated - run fit-polynomial-calibration first")
 	}
 
 	targetPose := t.getTargetPose(ctx)
@@ -866,6 +992,7 @@ func (t *componentTracker) trackTarget(ctx context.Context) error {
 	targetPos := targetPose.Pose().Point()
 
 	pan, tilt := t.predictPanTilt(targetPos)
+	t.logger.Debugf("Predicted pan: %.1f, tilt: %.1f, zoom: %.1f", pan, tilt, t.fixedZoomValue)
 
 	// Clamp
 	pan = math.Max(-1.0, math.Min(1.0, pan))
