@@ -40,10 +40,10 @@ type Config struct {
 	OnvifPTZClientName           string  `json:"onvif_ptz_client_name"`
 	UpdateRateHz                 float64 `json:"update_rate_hz"`
 	EnableOnStart                bool    `json:"enable_on_start"`
-	FixedZoomValue               float64 `json:"fixed_zoom_value"`
-	FixedPanSpeed                float64 `json:"fixed_pan_speed"`
-	FixedTiltSpeed               float64 `json:"fixed_tilt_speed"`
-	FixedZoomSpeed               float64 `json:"fixed_zoom_speed"`
+	ZoomValue                    float64 `json:"zoom_value"`
+	PanSpeed                     float64 `json:"pan_speed"`
+	TiltSpeed                    float64 `json:"tilt_speed"`
+	ZoomSpeed                    float64 `json:"zoom_speed"`
 	PanMinSpeedDegreesPerSecond  float64 `json:"pan_min_speed_degrees_per_second"`
 	PanMaxSpeedDegreesPerSecond  float64 `json:"pan_max_speed_degrees_per_second"`
 	TiltMinSpeedDegreesPerSecond float64 `json:"tilt_min_speed_degrees_per_second"`
@@ -52,6 +52,10 @@ type Config struct {
 	PanMaxDeg                    float64 `json:"pan_max_deg"`
 	TiltMinDeg                   float64 `json:"tilt_min_deg"`
 	TiltMaxDeg                   float64 `json:"tilt_max_deg"`
+	MinZoomDistanceMM            float64 `json:"min_zoom_distance_mm"`
+	MaxZoomDistanceMM            float64 `json:"max_zoom_distance_mm"`
+	MinZoomValue                 float64 `json:"min_zoom_value_normalized"`
+	MaxZoomValue                 float64 `json:"max_zoom_value_normalized"`
 	Deadzone                     float64 `json:"deadzone"`
 }
 
@@ -73,17 +77,17 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.UpdateRateHz <= 0 {
 		return nil, nil, errors.New("update_rate_hz must be greater than 0")
 	}
-	if cfg.FixedZoomValue <= 0 || cfg.FixedZoomValue > 1 {
-		return nil, nil, errors.New("fixed_zoom_value must be greater than 0 and less than or equal to 1")
+	if cfg.ZoomValue < 0 || cfg.ZoomValue > 1 {
+		return nil, nil, errors.New("zoom_value must be greater than or equal to 0 and less than or equal to 1")
 	}
-	if cfg.FixedPanSpeed < 0 || cfg.FixedPanSpeed > 1 {
-		return nil, nil, errors.New("fixed_pan_speed must be greater than or equal to 0 and less than or equal to 1")
+	if cfg.PanSpeed < 0 || cfg.PanSpeed > 1 {
+		return nil, nil, errors.New("pan_speed must be greater than or equal to 0 and less than or equal to 1")
 	}
-	if cfg.FixedTiltSpeed < 0 || cfg.FixedTiltSpeed > 1 {
-		return nil, nil, errors.New("fixed_tilt_speed must be greater than or equal to 0 and less than or equal to 1")
+	if cfg.TiltSpeed < 0 || cfg.TiltSpeed > 1 {
+		return nil, nil, errors.New("tilt_speed must be greater than or equal to 0 and less than or equal to 1")
 	}
-	if cfg.FixedZoomSpeed < 0 || cfg.FixedZoomSpeed > 1 {
-		return nil, nil, errors.New("fixed_zoom_speed must be greater than or equal to 0 and less than or equal to 1")
+	if cfg.ZoomSpeed < 0 || cfg.ZoomSpeed > 1 {
+		return nil, nil, errors.New("zoom_speed must be greater than or equal to 0 and less than or equal to 1")
 	}
 	if cfg.PanMinDeg == 0 && cfg.PanMaxDeg == 0 {
 		cfg.PanMinDeg = 0
@@ -120,6 +124,18 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.Deadzone < 0 || cfg.Deadzone > 1 {
 		return nil, nil, errors.New("deadzone must be greater than or equal to 0 and less than or equal to 1 (normalized range)")
 	}
+	if cfg.MinZoomDistanceMM < 0 {
+		return nil, nil, errors.New("min_zoom_distance_mm must be greater than or equal to 0")
+	}
+	if cfg.MaxZoomDistanceMM < 0 {
+		return nil, nil, errors.New("max_zoom_distance_mm must be greater than or equal to 0")
+	}
+	if cfg.MinZoomValue < 0 || cfg.MaxZoomValue < 0 {
+		return nil, nil, errors.New("min_zoom_value_normalized and max_zoom_value_normalized must be greater than or equal to 0")
+	}
+	if cfg.MinZoomValue >= cfg.MaxZoomValue {
+		return nil, nil, errors.New("min_zoom_value_normalized must be less than or equal to max_zoom_value_normalized")
+	}
 	return nil, nil, nil
 }
 
@@ -151,10 +167,10 @@ type componentTracker struct {
 	targetComponentName string
 	onvifPTZClientName  string
 
-	fixedZoomValue               float64
-	fixedPanSpeed                float64
-	fixedTiltSpeed               float64
-	fixedZoomSpeed               float64
+	zoomValue                    float64
+	panSpeed                     float64
+	tiltSpeed                    float64
+	zoomSpeed                    float64
 	updateRateHz                 float64
 	panMinDeg                    float64
 	panMaxDeg                    float64
@@ -170,6 +186,10 @@ type componentTracker struct {
 	lastSentTilt                 float64
 	lastSentZoom                 float64
 	deadzone                     float64
+	minZoomDistance              float64
+	maxZoomDistance              float64
+	minZoomValue                 float64
+	maxZoomValue                 float64
 }
 
 // Close implements resource.Resource.
@@ -193,7 +213,7 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 		return err
 	}
 
-	s.logger.Infof("Reconfiguring pose tracker with pan speed: %f, tilt speed: %f, zoom speed: %f", conf.FixedPanSpeed, conf.FixedTiltSpeed, conf.FixedZoomSpeed)
+	s.logger.Infof("Reconfiguring pose tracker with pan speed: %f, tilt speed: %f, zoom speed: %f", conf.PanSpeed, conf.TiltSpeed, conf.ZoomSpeed)
 	wasRunning := s.running
 	if s.running {
 		s.cancelFunc()
@@ -202,10 +222,10 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	s.targetComponentName = conf.TargetComponentName
 	s.onvifPTZClientName = conf.OnvifPTZClientName
 	s.updateRateHz = conf.UpdateRateHz
-	s.fixedZoomValue = conf.FixedZoomValue
-	s.fixedPanSpeed = conf.FixedPanSpeed
-	s.fixedTiltSpeed = conf.FixedTiltSpeed
-	s.fixedZoomSpeed = conf.FixedZoomSpeed
+	s.zoomValue = conf.ZoomValue
+	s.panSpeed = conf.PanSpeed
+	s.tiltSpeed = conf.TiltSpeed
+	s.zoomSpeed = conf.ZoomSpeed
 	s.panMinSpeedDegreesPerSecond = conf.PanMinSpeedDegreesPerSecond
 	s.panMaxSpeedDegreesPerSecond = conf.PanMaxSpeedDegreesPerSecond
 	s.tiltMinSpeedDegreesPerSecond = conf.TiltMinSpeedDegreesPerSecond
@@ -215,6 +235,10 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	s.tiltMinDeg = conf.TiltMinDeg
 	s.tiltMaxDeg = conf.TiltMaxDeg
 	s.deadzone = conf.Deadzone
+	s.minZoomDistance = conf.MinZoomDistanceMM
+	s.maxZoomDistance = conf.MaxZoomDistanceMM
+	s.minZoomValue = conf.MinZoomValue
+	s.maxZoomValue = conf.MaxZoomValue
 	if wasRunning {
 		go s.trackingLoop(s.cancelCtx)
 		s.logger.Info("PTZ pose tracker restarted")
@@ -251,9 +275,9 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		robotClient:                  robotClient,
 		targetComponentName:          conf.TargetComponentName,
 		onvifPTZClientName:           conf.OnvifPTZClientName,
-		fixedPanSpeed:                conf.FixedPanSpeed,
-		fixedTiltSpeed:               conf.FixedTiltSpeed,
-		fixedZoomSpeed:               conf.FixedZoomSpeed,
+		panSpeed:                     conf.PanSpeed,
+		tiltSpeed:                    conf.TiltSpeed,
+		zoomSpeed:                    conf.ZoomSpeed,
 		panMinSpeedDegreesPerSecond:  conf.PanMinSpeedDegreesPerSecond,
 		panMaxSpeedDegreesPerSecond:  conf.PanMaxSpeedDegreesPerSecond,
 		tiltMinSpeedDegreesPerSecond: conf.TiltMinSpeedDegreesPerSecond,
@@ -264,6 +288,10 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		tiltMinDeg:                   conf.TiltMinDeg,
 		tiltMaxDeg:                   conf.TiltMaxDeg,
 		deadzone:                     conf.Deadzone,
+		minZoomDistance:              conf.MinZoomDistanceMM,
+		maxZoomDistance:              conf.MaxZoomDistanceMM,
+		minZoomValue:                 conf.MinZoomValue,
+		maxZoomValue:                 conf.MaxZoomValue,
 		samples:                      nil,
 		calibration: Calibration{
 			PanPolyCoeffs:  [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -313,8 +341,8 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		if !ok {
 			return nil, fmt.Errorf("zoom is not a float")
 		}
-		t.fixedZoomValue = zoom
-		return map[string]interface{}{"status": "success", "zoom": t.fixedZoomValue}, nil
+		t.zoomValue = zoom
+		return map[string]interface{}{"status": "success", "zoom": t.zoomValue}, nil
 
 	case "set-deadzone":
 		deadzone, ok := cmd["deadzone"].(float64)
@@ -646,6 +674,25 @@ func (t *componentTracker) getTargetPose(ctx context.Context) *referenceframe.Po
 	return targetPose
 }
 
+func (t *componentTracker) getCameraPose(ctx context.Context) *referenceframe.PoseInFrame {
+	fsc, err := t.robotClient.FrameSystemConfig(ctx)
+	if err != nil {
+		t.logger.Error("Failed to get frame system config: %v", err)
+		return nil
+	}
+	cameraFramePart := touch.FindPart(fsc, t.cfg.PTZCameraName)
+	if cameraFramePart == nil {
+		t.logger.Errorf("can't find frame for %v", t.cfg.PTZCameraName)
+		return nil
+	}
+	cameraPose, err := t.robotClient.GetPose(ctx, cameraFramePart.FrameConfig.Name(), "", []*referenceframe.LinkInFrame{}, map[string]interface{}{})
+	if err != nil {
+		t.logger.Errorf("Failed to get pose: %v", err)
+		return nil
+	}
+	return cameraPose
+}
+
 func (t *componentTracker) getCameraCurrentPTZStatus(ctx context.Context) (float64, float64, float64, error) {
 	onvifPTZClientName := resource.NewName(generic.API, t.onvifPTZClientName)
 	onvifPTZClient, err := t.robotClient.ResourceByName(onvifPTZClientName)
@@ -747,11 +794,11 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, pan float64, ti
 		return fmt.Errorf("failed to get onvif PTZ client: %w", err)
 	}
 
-	panSpeed := t.fixedPanSpeed
-	tiltSpeed := t.fixedTiltSpeed
-	zoomSpeed := t.fixedZoomSpeed
+	panSpeed := t.panSpeed
+	tiltSpeed := t.tiltSpeed
+	zoomSpeed := t.zoomSpeed
 
-	currentPan, currentTilt, _, err := t.getCameraCurrentPTZStatus(ctx)
+	currentPan, currentTilt, currentZoom, err := t.getCameraCurrentPTZStatus(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get current PTZ status: %w", err)
 	}
@@ -774,7 +821,7 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, pan float64, ti
 	// Calculate deltas to current position for speed calculation
 	panDeltaNormalized := math.Abs(pan - currentPan)
 	tiltDeltaNormalized := math.Abs(tilt - currentTilt)
-
+	zoomDeltaNormalized := math.Abs(zoom - currentZoom)
 	// Deadzone check: skip move if target is within deadzone of current position
 	// Deadzone is in normalized [0, 1] range (e.g., 0.01 = 1% of the full range)
 	if t.deadzone > 0 {
@@ -858,6 +905,13 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, pan float64, ti
 		}
 		// Clamp to [0.0, 1.0] as ONVIF expects normalized speeds
 		tiltSpeed = math.Max(0.0, math.Min(1.0, tiltSpeed))
+	}
+	if t.zoomSpeed == 0 {
+		if zoomDeltaNormalized < t.deadzone {
+			zoomSpeed = 0.0
+		} else {
+			zoomSpeed = 1
+		}
 	}
 	// Ensure zoom speed is also clamped
 	zoomSpeed = math.Max(0.0, math.Min(1.0, zoomSpeed))
@@ -1004,8 +1058,40 @@ func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt fl
 	return pan, tilt
 }
 
-func (t *componentTracker) predictPanTilt(pos r3.Vector) (pan, tilt float64) {
-	return t.predictPanTiltPolynomial(pos)
+func (t *componentTracker) predictPanTiltZoom(ctx context.Context, pos r3.Vector) (pan, tilt, zoom float64) {
+	pan, tilt = t.predictPanTiltPolynomial(pos)
+	zoom = t.calculateZoom(ctx, pos)
+	return pan, tilt, zoom
+}
+
+func (t *componentTracker) calculateZoom(ctx context.Context, pos r3.Vector) float64 {
+	cameraPos := t.getCameraPose(ctx).Pose().Point()
+	distance := pos.Distance(cameraPos)
+	t.logger.Debugf("calculateZoom: calculating zoom for distance: %.2f mm, minZoomDistance: %.2f mm, maxZoomDistance: %.2f mm, minZoomValue: %.2f, maxZoomValue: %.2f\n", distance, t.minZoomDistance, t.maxZoomDistance, t.minZoomValue, t.maxZoomValue)
+
+	// Clamp distance to [minZoomDistance, maxZoomDistance]
+	// Closer = zoomed out (minZoomValue), farther = zoomed in (maxZoomValue)
+	if distance <= t.minZoomDistance {
+		t.logger.Debugf("calculateZoom: closest: zoomed out, zoom: %.2f", t.minZoomValue)
+		return t.minZoomValue // Closest: zoomed out
+	}
+	if distance >= t.maxZoomDistance {
+		t.logger.Debugf("calculateZoom: farthest: zoomed in, zoom: %.2f", t.maxZoomValue)
+		return t.maxZoomValue // Farthest: zoomed in
+	}
+
+	// Linear interpolation between minZoomDistance and maxZoomDistance
+	// Normalized distance: 0 at minZoomDistance, 1 at maxZoomDistance
+	// Zoom: minZoomValue at minZoomDistance (closest), maxZoomValue at maxZoomDistance (farthest)
+	if (t.maxZoomDistance - t.minZoomDistance) > 0 {
+		normalizedDistance := (distance - t.minZoomDistance) / (t.maxZoomDistance - t.minZoomDistance)
+		zoom := t.minZoomValue + (t.maxZoomValue-t.minZoomValue)*normalizedDistance
+		t.logger.Debugf("calculateZoom: zoom: %.2f normalizedDistance: %.2f, distance: %.2f mm", zoom, normalizedDistance, distance)
+		return zoom
+	} else {
+		t.logger.Debugf("calculateZoom: minZoomDistance == maxZoomDistance, zoom: %.2f", t.minZoomValue)
+		return t.minZoomValue
+	}
 }
 
 func (t *componentTracker) trackTarget(ctx context.Context) error {
@@ -1019,12 +1105,12 @@ func (t *componentTracker) trackTarget(ctx context.Context) error {
 	}
 	targetPos := targetPose.Pose().Point()
 
-	pan, tilt := t.predictPanTilt(targetPos)
-	t.logger.Debugf("Predicted pan: %.1f, tilt: %.1f, zoom: %.1f", pan, tilt, t.fixedZoomValue)
+	pan, tilt, zoom := t.predictPanTiltZoom(ctx, targetPos)
+	t.logger.Debugf("Predicted pan: %.1f, tilt: %.1f, zoom: %.1f", pan, tilt, zoom)
 
 	// Clamp
 	pan = math.Max(-1.0, math.Min(1.0, pan))
 	tilt = math.Max(-1.0, math.Min(1.0, tilt))
 
-	return t.sendAbsoluteMove(ctx, pan, tilt, t.fixedZoomValue)
+	return t.sendAbsoluteMove(ctx, pan, tilt, zoom)
 }
