@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/erh/vmodutils"
@@ -16,6 +17,7 @@ import (
 	"go.viam.com/rdk/robot"
 	"go.viam.com/rdk/robot/framesystem"
 	genericservice "go.viam.com/rdk/services/generic"
+	"go.viam.com/utils"
 	"gonum.org/v1/gonum/mat"
 )
 
@@ -203,7 +205,6 @@ type componentTracker struct {
 
 	cancelCtx  context.Context
 	cancelFunc func()
-	running    bool
 
 	robotClient         robot.Robot
 	frameSystemService  framesystem.Service
@@ -235,16 +236,23 @@ type componentTracker struct {
 	absoluteCalibrationPanPlane        r3.Vector
 	absoluteCalibrationPan0Reference   r3.Vector                                     // Direction in panPlane that corresponds to pan=0
 	absoluteCalibrationRayMeasurements map[string]AbsoluteCalibrationRayMeasurements // rayId -> measurements
+	worker                             *utils.StoppableWorkers
+	workerRunning                      atomic.Bool
 }
 
 // Close implements resource.Resource.
 func (s *componentTracker) Close(ctx context.Context) error {
 	s.logger.Debug("Closing component tracker")
 	// Stop tracking loop if running
-	if s.running {
-		s.running = false
-		if s.cancelFunc != nil {
-			s.cancelFunc()
+	if s.workerRunning.Load() {
+		s.workerRunning.Store(false)
+		s.worker.Stop()
+	}
+	if s.robotClient != nil {
+		s.logger.Debug("Closing robot client connection")
+		if err := s.robotClient.Close(ctx); err != nil {
+			s.logger.Errorf("Error closing robot client: %v", err)
+			return err
 		}
 	}
 	return nil
@@ -259,10 +267,11 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	}
 
 	s.logger.Infof("Reconfiguring pose tracker with pan speed: %f, tilt speed: %f, zoom speed: %f", conf.PanSpeed, conf.TiltSpeed, conf.ZoomSpeed)
-	wasRunning := s.running
-	if s.running {
-		s.cancelFunc()
-		s.running = false
+	wasRunning := s.workerRunning.Load()
+	if wasRunning {
+		s.worker.Stop()
+		s.workerRunning.Store(false)
+		s.worker = utils.NewBackgroundStoppableWorkers()
 	}
 	// Update the config struct so TrackingMode and other fields are available
 	s.cfg = conf
@@ -287,10 +296,16 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	s.minZoomValue = conf.MinZoomValue
 	s.maxZoomValue = conf.MaxZoomValue
 	s.trackingMode = conf.TrackingMode
+
 	if wasRunning {
-		go s.trackingLoop(s.cancelCtx)
 		s.logger.Info("PTZ pose tracker restarted")
-		s.running = true
+		s.workerRunning.Store(true)
+		s.worker.Add(func(workerCtx context.Context) {
+			timeoutCtx, cancel := context.WithTimeout(workerCtx, time.Hour*24)
+			defer cancel()
+			defer s.workerRunning.Store(false)
+			s.trackingLoop(timeoutCtx)
+		})
 	}
 	return nil
 }
@@ -358,7 +373,6 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		maxZoomDistance:              conf.MaxZoomDistanceMM,
 		minZoomValue:                 conf.MinZoomValue,
 		maxZoomValue:                 conf.MaxZoomValue,
-		samples:                      nil,
 		calibration: Calibration{
 			PanPolyCoeffs:  [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 			TiltPolyCoeffs: [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -368,11 +382,17 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		absoluteCalibrationPanPlane:        conf.AbsoluteCalibrationPanPlane,
 		absoluteCalibrationPan0Reference:   r3.Vector{X: 1, Y: 0, Z: 0}, // Default to world +X
 		absoluteCalibrationRayMeasurements: make(map[string]AbsoluteCalibrationRayMeasurements),
+		worker:                             utils.NewBackgroundStoppableWorkers(),
 	}
 
 	if conf.EnableOnStart {
-		go s.trackingLoop(s.cancelCtx)
 		s.logger.Info("PTZ component tracker started")
+		s.worker.Add(func(workerCtx context.Context) {
+			timeoutCtx, cancel := context.WithTimeout(workerCtx, time.Hour*24)
+			defer cancel()
+			defer s.workerRunning.Store(false)
+			s.trackingLoop(timeoutCtx)
+		})
 	}
 
 	return s, nil
@@ -386,7 +406,7 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 	t.logger.Infof("DoCommand: %+v", cmd)
 	switch cmd["command"] {
 	case "start":
-		if t.running {
+		if t.workerRunning.Load() {
 			return map[string]interface{}{"status": "already_running"}, nil
 		}
 		// Cancel old context and create new one for fresh start
@@ -394,15 +414,26 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			t.cancelFunc()
 		}
 		t.cancelCtx, t.cancelFunc = context.WithCancel(context.Background())
-		t.running = true
-		go t.trackingLoop(t.cancelCtx)
+		t.workerRunning.Store(true)
+		t.worker.Add(func(workerCtx context.Context) {
+			timeoutCtx, cancel := context.WithTimeout(workerCtx, time.Hour*24)
+			defer cancel()
+			defer t.workerRunning.Store(false)
+			t.trackingLoop(timeoutCtx)
+		})
 		return map[string]interface{}{"status": "running"}, nil
 
 	case "stop":
-		if !t.running {
+		if t.workerRunning.Load() {
+			t.logger.Warn("stopping worker")
+			// stop the running worker
+			t.worker.Stop()
+			t.worker = utils.NewBackgroundStoppableWorkers()
+		}
+		if !t.workerRunning.Load() {
 			return map[string]interface{}{"status": "already_stopped"}, nil
 		}
-		t.running = false
+		t.workerRunning.Store(false)
 		if t.cancelFunc != nil {
 			t.cancelFunc() // Cancel context to exit the loop
 		}
@@ -673,7 +704,7 @@ func (t *componentTracker) trackingLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !t.running {
+			if !t.workerRunning.Load() {
 				continue
 			}
 			err := t.trackTarget(ctx)
