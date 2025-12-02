@@ -25,8 +25,8 @@ func realMain() error {
 	// can load these from a remote machine if you need
 
 	cfg := models.Config{
-		TargetComponentName: "target_component_name",
-		PTZCameraName:       "ptz_camera",
+		TargetComponentName: "target-component-name",
+		PTZCameraName:       "ptz-camera",
 		OnvifPTZClientName:  "onvif-ptz-client",
 		UpdateRateHz:        10.0,
 		EnableOnStart:       true,

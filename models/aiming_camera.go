@@ -15,11 +15,11 @@ import (
 )
 
 var (
-	AimingCamera = resource.NewModel("viam", "ptz-target-tracker", "aiming-camera")
+	ModelAimingCamera = resource.NewModel("viam", "ptz-target-tracker", "aiming-camera")
 )
 
 func init() {
-	resource.RegisterComponent(camera.API, AimingCamera,
+	resource.RegisterComponent(camera.API, ModelAimingCamera,
 		resource.Registration[camera.Camera, *AimingCameraConfig]{
 			Constructor: newAimingCamera,
 		},
@@ -27,7 +27,6 @@ func init() {
 }
 
 type AimingCameraConfig struct {
-	resource.TriviallyValidateConfig
 	CameraName string `json:"camera_name"`
 }
 
