@@ -69,21 +69,22 @@ func init() {
 }
 
 type Config struct {
-	TargetComponentName         string    `json:"target_component_name"`
-	PTZCameraName               string    `json:"ptz_camera_name"`
-	OnvifPTZClientName          string    `json:"onvif_ptz_client_name"`
-	UpdateRateHz                float64   `json:"update_rate_hz"`
-	EnableOnStart               bool      `json:"enable_on_start"`
-	ZoomValue                   float64   `json:"zoom_value"`
-	PanMinDeg                   float64   `json:"pan_min_deg"`
-	PanMaxDeg                   float64   `json:"pan_max_deg"`
-	TiltMinDeg                  float64   `json:"tilt_min_deg"`
-	TiltMaxDeg                  float64   `json:"tilt_max_deg"`
-	MinZoomDistanceMM           float64   `json:"min_zoom_distance_mm"`
-	MaxZoomDistanceMM           float64   `json:"max_zoom_distance_mm"`
-	Deadzone                    float64   `json:"deadzone"`
-	TrackingMode                string    `json:"tracking_mode"`
-	AbsoluteCalibrationPanPlane r3.Vector `json:"absolute_calibration_pan_plane"`
+	TargetComponentName         string      `json:"target_component_name"`
+	PTZCameraName               string      `json:"ptz_camera_name"`
+	OnvifPTZClientName          string      `json:"onvif_ptz_client_name"`
+	UpdateRateHz                float64     `json:"update_rate_hz"`
+	EnableOnStart               bool        `json:"enable_on_start"`
+	ZoomValue                   float64     `json:"zoom_value"`
+	PanMinDeg                   float64     `json:"pan_min_deg"`
+	PanMaxDeg                   float64     `json:"pan_max_deg"`
+	TiltMinDeg                  float64     `json:"tilt_min_deg"`
+	TiltMaxDeg                  float64     `json:"tilt_max_deg"`
+	MinZoomDistanceMM           float64     `json:"min_zoom_distance_mm"`
+	MaxZoomDistanceMM           float64     `json:"max_zoom_distance_mm"`
+	Deadzone                    float64     `json:"deadzone"`
+	TrackingMode                string      `json:"tracking_mode"`
+	AbsoluteCalibrationPanPlane r3.Vector   `json:"absolute_calibration_pan_plane"`
+	Calibration                 Calibration `json:"calibration"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -137,6 +138,25 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.TrackingMode != "polynomial-fit" && cfg.TrackingMode != "absolute-position" {
 		return nil, nil, errors.New("tracking_mode must be either 'polynomial-fit' or 'absolute-position'")
 	}
+	if cfg.Calibration.IsCalibrated {
+		if len(cfg.Calibration.PanPolyCoeffs) != 10 {
+			return nil, nil, errors.New("pan_poly_coeffs must have exactly 10 coefficients")
+		}
+		if len(cfg.Calibration.TiltPolyCoeffs) != 10 {
+			return nil, nil, errors.New("tilt_poly_coeffs must have exactly 10 coefficients")
+		}
+		// Check if all coefficients are valid numbers
+		for _, coeff := range cfg.Calibration.PanPolyCoeffs {
+			if math.IsNaN(coeff) || math.IsInf(coeff, 0) {
+				return nil, nil, errors.New("pan_poly_coeffs must contain valid numbers")
+			}
+		}
+		for _, coeff := range cfg.Calibration.TiltPolyCoeffs {
+			if math.IsNaN(coeff) || math.IsInf(coeff, 0) {
+				return nil, nil, errors.New("tilt_poly_coeffs must contain valid numbers")
+			}
+		}
+	}
 	return nil, nil, nil
 }
 
@@ -148,9 +168,9 @@ type TrackingSample struct {
 }
 
 type Calibration struct {
-	PanPolyCoeffs  [10]float64
-	TiltPolyCoeffs [10]float64
-	IsCalibrated   bool
+	PanPolyCoeffs  []float64 `json:"pan_poly_coeffs"`
+	TiltPolyCoeffs []float64 `json:"tilt_poly_coeffs"`
+	IsCalibrated   bool      `json:"is_calibrated"`
 }
 type componentTracker struct {
 	resource.AlwaysRebuild
@@ -240,6 +260,13 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	s.minZoomValue = 0.0
 	s.maxZoomValue = 1.0
 
+	// Copy calibration if provided
+	s.logger.Debugf("Reconfiguring component tracker with new config: %+v", conf)
+	if conf.Calibration.IsCalibrated && len(conf.Calibration.PanPolyCoeffs) > 0 {
+		s.calibration = conf.Calibration
+		s.logger.Infof("Updated calibration during reconfigure: %+v", s.calibration)
+	}
+
 	if wasRunning {
 		s.logger.Info("PTZ pose tracker restarted")
 		s.workerRunning.Store(true)
@@ -308,8 +335,8 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		minZoomDistance:     conf.MinZoomDistanceMM,
 		maxZoomDistance:     conf.MaxZoomDistanceMM,
 		calibration: Calibration{
-			PanPolyCoeffs:  [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-			TiltPolyCoeffs: [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			PanPolyCoeffs:  []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			TiltPolyCoeffs: []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 			IsCalibrated:   false,
 		},
 		trackingMode:                       conf.TrackingMode,
@@ -317,6 +344,13 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		absoluteCalibrationPan0Reference:   r3.Vector{X: 1, Y: 0, Z: 0}, // Default to world +X
 		absoluteCalibrationRayMeasurements: make(map[string]AbsoluteCalibrationRayMeasurements),
 		worker:                             utils.NewBackgroundStoppableWorkers(),
+	}
+
+	// Copy calibration if provided
+	s.logger.Debugf("Creating component tracker with config: %+v", conf)
+	if conf.Calibration.IsCalibrated && len(conf.Calibration.PanPolyCoeffs) > 0 {
+		s.calibration = conf.Calibration
+		s.logger.Infof("Created component with calibration: %+v", s.calibration)
 	}
 
 	if conf.EnableOnStart {
@@ -504,8 +538,8 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 	case "clear-calibration":
 		t.calibration.IsCalibrated = false
 		t.samples = []TrackingSample{}
-		t.calibration.PanPolyCoeffs = [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-		t.calibration.TiltPolyCoeffs = [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+		t.calibration.PanPolyCoeffs = []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+		t.calibration.TiltPolyCoeffs = []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 		return map[string]interface{}{"status": "cleared"}, nil
 
 	case "compute-polynomial":
@@ -781,7 +815,7 @@ func solveLinearSystem10x10(A [10][10]float64, b [10]float64) [10]float64 {
 	return coeffs
 }
 
-func (t *componentTracker) fitPolynomialSingle(getValue func(TrackingSample) float64) [10]float64 {
+func (t *componentTracker) fitPolynomialSingle(getValue func(TrackingSample) float64) []float64 {
 	// Features: [x², y², z², xy, xz, yz, x, y, z, 1]
 	// Build normal equations
 	var XtX [10][10]float64
@@ -804,7 +838,9 @@ func (t *componentTracker) fitPolynomialSingle(getValue func(TrackingSample) flo
 		}
 	}
 
-	return solveLinearSystem10x10(XtX, XtY)
+	coeffs := solveLinearSystem10x10(XtX, XtY)
+	// Convert array to slice
+	return coeffs[:]
 }
 
 func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt float64, err error) {
