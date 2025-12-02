@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -166,12 +167,15 @@ type componentTracker struct {
 	absoluteCalibrationPan0Reference r3.Vector // Direction in panPlane that corresponds to pan=0
 	worker                           *utils.StoppableWorkers
 	workerRunning                    atomic.Bool
+	workerMutex                      sync.Mutex
 }
 
 // Close implements resource.Resource.
 func (s *componentTracker) Close(ctx context.Context) error {
 	s.logger.Debug("Closing component tracker")
 	// Stop tracking loop if running
+	s.workerMutex.Lock()
+	defer s.workerMutex.Unlock()
 	if s.workerRunning.Load() {
 		s.workerRunning.Store(false)
 		s.worker.Stop()
@@ -193,6 +197,9 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	if err != nil {
 		return err
 	}
+
+	s.workerMutex.Lock()
+	defer s.workerMutex.Unlock()
 
 	wasRunning := s.workerRunning.Load()
 	if wasRunning {
@@ -306,6 +313,8 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 
 	if conf.EnableOnStart {
 		s.logger.Info("PTZ component tracker started")
+		s.workerMutex.Lock()
+		defer s.workerMutex.Unlock()
 		s.worker.Add(func(workerCtx context.Context) {
 			timeoutCtx, cancel := context.WithTimeout(workerCtx, time.Hour*24)
 			defer cancel()
@@ -325,6 +334,8 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 	t.logger.Infof("DoCommand: %+v", cmd)
 	switch cmd["command"] {
 	case "start":
+		t.workerMutex.Lock()
+		defer t.workerMutex.Unlock()
 		if t.workerRunning.Load() {
 			return map[string]interface{}{"status": "already_running"}, nil
 		}
@@ -343,6 +354,8 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		return map[string]interface{}{"status": "running"}, nil
 
 	case "stop":
+		t.workerMutex.Lock()
+		defer t.workerMutex.Unlock()
 		if t.workerRunning.Load() {
 			t.logger.Warn("stopping worker")
 			// stop the running worker
