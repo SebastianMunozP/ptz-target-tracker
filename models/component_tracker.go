@@ -315,6 +315,18 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		return nil, fmt.Errorf("failed to get frame system service: %w", err)
 	}
 
+	_, err = frameSystemService.GetPose(ctx, conf.TargetComponentName, "", []*referenceframe.LinkInFrame{}, map[string]interface{}{})
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("failed to get target pose: %w", err)
+	}
+
+	_, err = frameSystemService.GetPose(ctx, conf.PTZCameraName, "", []*referenceframe.LinkInFrame{}, map[string]interface{}{})
+	if err != nil {
+		cancelFunc()
+		return nil, fmt.Errorf("failed to get PTZ camera pose: %w", err)
+	}
+
 	s := &componentTracker{
 		name:                         name,
 		logger:                       logger,
