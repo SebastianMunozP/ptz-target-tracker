@@ -69,30 +69,21 @@ func init() {
 }
 
 type Config struct {
-	TargetComponentName          string    `json:"target_component_name"`
-	PTZCameraName                string    `json:"ptz_camera_name"`
-	OnvifPTZClientName           string    `json:"onvif_ptz_client_name"`
-	UpdateRateHz                 float64   `json:"update_rate_hz"`
-	EnableOnStart                bool      `json:"enable_on_start"`
-	ZoomValue                    float64   `json:"zoom_value"`
-	PanSpeed                     float64   `json:"pan_speed"`
-	TiltSpeed                    float64   `json:"tilt_speed"`
-	ZoomSpeed                    float64   `json:"zoom_speed"`
-	PanMinSpeedDegreesPerSecond  float64   `json:"pan_min_speed_degrees_per_second"`
-	PanMaxSpeedDegreesPerSecond  float64   `json:"pan_max_speed_degrees_per_second"`
-	TiltMinSpeedDegreesPerSecond float64   `json:"tilt_min_speed_degrees_per_second"`
-	TiltMaxSpeedDegreesPerSecond float64   `json:"tilt_max_speed_degrees_per_second"`
-	PanMinDeg                    float64   `json:"pan_min_deg"`
-	PanMaxDeg                    float64   `json:"pan_max_deg"`
-	TiltMinDeg                   float64   `json:"tilt_min_deg"`
-	TiltMaxDeg                   float64   `json:"tilt_max_deg"`
-	MinZoomDistanceMM            float64   `json:"min_zoom_distance_mm"`
-	MaxZoomDistanceMM            float64   `json:"max_zoom_distance_mm"`
-	MinZoomValue                 float64   `json:"min_zoom_value_normalized"`
-	MaxZoomValue                 float64   `json:"max_zoom_value_normalized"`
-	Deadzone                     float64   `json:"deadzone"`
-	TrackingMode                 string    `json:"tracking_mode"`
-	AbsoluteCalibrationPanPlane  r3.Vector `json:"absolute_calibration_pan_plane"`
+	TargetComponentName         string    `json:"target_component_name"`
+	PTZCameraName               string    `json:"ptz_camera_name"`
+	OnvifPTZClientName          string    `json:"onvif_ptz_client_name"`
+	UpdateRateHz                float64   `json:"update_rate_hz"`
+	EnableOnStart               bool      `json:"enable_on_start"`
+	ZoomValue                   float64   `json:"zoom_value"`
+	PanMinDeg                   float64   `json:"pan_min_deg"`
+	PanMaxDeg                   float64   `json:"pan_max_deg"`
+	TiltMinDeg                  float64   `json:"tilt_min_deg"`
+	TiltMaxDeg                  float64   `json:"tilt_max_deg"`
+	MinZoomDistanceMM           float64   `json:"min_zoom_distance_mm"`
+	MaxZoomDistanceMM           float64   `json:"max_zoom_distance_mm"`
+	Deadzone                    float64   `json:"deadzone"`
+	TrackingMode                string    `json:"tracking_mode"`
+	AbsoluteCalibrationPanPlane r3.Vector `json:"absolute_calibration_pan_plane"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -116,15 +107,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.ZoomValue < 0 || cfg.ZoomValue > 1 {
 		return nil, nil, errors.New("zoom_value must be greater than or equal to 0 and less than or equal to 1")
 	}
-	if cfg.PanSpeed < 0 || cfg.PanSpeed > 1 {
-		return nil, nil, errors.New("pan_speed must be greater than or equal to 0 and less than or equal to 1")
-	}
-	if cfg.TiltSpeed < 0 || cfg.TiltSpeed > 1 {
-		return nil, nil, errors.New("tilt_speed must be greater than or equal to 0 and less than or equal to 1")
-	}
-	if cfg.ZoomSpeed < 0 || cfg.ZoomSpeed > 1 {
-		return nil, nil, errors.New("zoom_speed must be greater than or equal to 0 and less than or equal to 1")
-	}
 	if cfg.PanMinDeg == 0 && cfg.PanMaxDeg == 0 {
 		cfg.PanMinDeg = 0
 		cfg.PanMaxDeg = 355
@@ -139,24 +121,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.TiltMaxDeg <= cfg.TiltMinDeg {
 		return nil, nil, errors.New("tilt_max_deg must be greater than tilt_min_deg")
 	}
-	if cfg.PanMinSpeedDegreesPerSecond < 0 {
-		return nil, nil, errors.New("pan_min_speed_degrees_per_second must be greater than or equal to 0")
-	}
-	if cfg.TiltMinSpeedDegreesPerSecond < 0 {
-		return nil, nil, errors.New("tilt_min_speed_degrees_per_second must be greater than or equal to 0")
-	}
-	if cfg.PanMaxSpeedDegreesPerSecond < 0 {
-		return nil, nil, errors.New("pan_max_speed_degrees_per_second must be greater than or equal to 0")
-	}
-	if cfg.TiltMaxSpeedDegreesPerSecond < 0 {
-		return nil, nil, errors.New("tilt_max_speed_degrees_per_second must be greater than or equal to 0")
-	}
-	if cfg.PanMaxSpeedDegreesPerSecond < cfg.PanMinSpeedDegreesPerSecond {
-		return nil, nil, errors.New("pan_max_speed_degrees_per_second must be greater than pan_min_speed_degrees_per_second")
-	}
-	if cfg.TiltMaxSpeedDegreesPerSecond < cfg.TiltMinSpeedDegreesPerSecond {
-		return nil, nil, errors.New("tilt_max_speed_degrees_per_second must be greater than tilt_min_speed_degrees_per_second")
-	}
 	if cfg.Deadzone < 0 || cfg.Deadzone > 1 {
 		return nil, nil, errors.New("deadzone must be greater than or equal to 0 and less than or equal to 1 (normalized range)")
 	}
@@ -165,12 +129,6 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 	if cfg.MaxZoomDistanceMM < 0 {
 		return nil, nil, errors.New("max_zoom_distance_mm must be greater than or equal to 0")
-	}
-	if cfg.MinZoomValue < 0 || cfg.MaxZoomValue < 0 {
-		return nil, nil, errors.New("min_zoom_value_normalized and max_zoom_value_normalized must be greater than or equal to 0")
-	}
-	if cfg.MinZoomValue >= cfg.MaxZoomValue {
-		return nil, nil, errors.New("min_zoom_value_normalized must be less than or equal to max_zoom_value_normalized")
 	}
 	// possible values: "polynomial-fit", "absolute-position", default: "polynomial-fit"
 	if cfg.TrackingMode == "" {
@@ -212,18 +170,11 @@ type componentTracker struct {
 	onvifPTZClientName  string
 
 	zoomValue                          float64
-	panSpeed                           float64
-	tiltSpeed                          float64
-	zoomSpeed                          float64
 	updateRateHz                       float64
 	panMinDeg                          float64
 	panMaxDeg                          float64
 	tiltMinDeg                         float64
 	tiltMaxDeg                         float64
-	panMinSpeedDegreesPerSecond        float64
-	panMaxSpeedDegreesPerSecond        float64
-	tiltMinSpeedDegreesPerSecond       float64
-	tiltMaxSpeedDegreesPerSecond       float64
 	samples                            []TrackingSample
 	calibration                        Calibration
 	lastSentTZValues                   PTZValues
@@ -266,7 +217,6 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 		return err
 	}
 
-	s.logger.Infof("Reconfiguring pose tracker with pan speed: %f, tilt speed: %f, zoom speed: %f", conf.PanSpeed, conf.TiltSpeed, conf.ZoomSpeed)
 	wasRunning := s.workerRunning.Load()
 	if wasRunning {
 		s.worker.Stop()
@@ -279,13 +229,6 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	s.onvifPTZClientName = conf.OnvifPTZClientName
 	s.updateRateHz = conf.UpdateRateHz
 	s.zoomValue = conf.ZoomValue
-	s.panSpeed = conf.PanSpeed
-	s.tiltSpeed = conf.TiltSpeed
-	s.zoomSpeed = conf.ZoomSpeed
-	s.panMinSpeedDegreesPerSecond = conf.PanMinSpeedDegreesPerSecond
-	s.panMaxSpeedDegreesPerSecond = conf.PanMaxSpeedDegreesPerSecond
-	s.tiltMinSpeedDegreesPerSecond = conf.TiltMinSpeedDegreesPerSecond
-	s.tiltMaxSpeedDegreesPerSecond = conf.TiltMaxSpeedDegreesPerSecond
 	s.panMinDeg = conf.PanMinDeg
 	s.panMaxDeg = conf.PanMaxDeg
 	s.tiltMinDeg = conf.TiltMinDeg
@@ -293,9 +236,9 @@ func (s *componentTracker) Reconfigure(ctx context.Context, deps resource.Depend
 	s.deadzone = conf.Deadzone
 	s.minZoomDistance = conf.MinZoomDistanceMM
 	s.maxZoomDistance = conf.MaxZoomDistanceMM
-	s.minZoomValue = conf.MinZoomValue
-	s.maxZoomValue = conf.MaxZoomValue
 	s.trackingMode = conf.TrackingMode
+	s.minZoomValue = 0.0
+	s.maxZoomValue = 1.0
 
 	if wasRunning {
 		s.logger.Info("PTZ pose tracker restarted")
@@ -347,32 +290,23 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 	}
 
 	s := &componentTracker{
-		name:                         name,
-		logger:                       logger,
-		cfg:                          conf,
-		cancelCtx:                    cancelCtx,
-		cancelFunc:                   cancelFunc,
-		robotClient:                  robotClient,
-		frameSystemService:           frameSystemService,
-		targetComponentName:          conf.TargetComponentName,
-		onvifPTZClientName:           conf.OnvifPTZClientName,
-		panSpeed:                     conf.PanSpeed,
-		tiltSpeed:                    conf.TiltSpeed,
-		zoomSpeed:                    conf.ZoomSpeed,
-		panMinSpeedDegreesPerSecond:  conf.PanMinSpeedDegreesPerSecond,
-		panMaxSpeedDegreesPerSecond:  conf.PanMaxSpeedDegreesPerSecond,
-		tiltMinSpeedDegreesPerSecond: conf.TiltMinSpeedDegreesPerSecond,
-		tiltMaxSpeedDegreesPerSecond: conf.TiltMaxSpeedDegreesPerSecond,
-		updateRateHz:                 conf.UpdateRateHz,
-		panMinDeg:                    conf.PanMinDeg,
-		panMaxDeg:                    conf.PanMaxDeg,
-		tiltMinDeg:                   conf.TiltMinDeg,
-		tiltMaxDeg:                   conf.TiltMaxDeg,
-		deadzone:                     conf.Deadzone,
-		minZoomDistance:              conf.MinZoomDistanceMM,
-		maxZoomDistance:              conf.MaxZoomDistanceMM,
-		minZoomValue:                 conf.MinZoomValue,
-		maxZoomValue:                 conf.MaxZoomValue,
+		name:                name,
+		logger:              logger,
+		cfg:                 conf,
+		cancelCtx:           cancelCtx,
+		cancelFunc:          cancelFunc,
+		robotClient:         robotClient,
+		frameSystemService:  frameSystemService,
+		targetComponentName: conf.TargetComponentName,
+		onvifPTZClientName:  conf.OnvifPTZClientName,
+		updateRateHz:        conf.UpdateRateHz,
+		panMinDeg:           conf.PanMinDeg,
+		panMaxDeg:           conf.PanMaxDeg,
+		tiltMinDeg:          conf.TiltMinDeg,
+		tiltMaxDeg:          conf.TiltMaxDeg,
+		deadzone:            conf.Deadzone,
+		minZoomDistance:     conf.MinZoomDistanceMM,
+		maxZoomDistance:     conf.MaxZoomDistanceMM,
 		calibration: Calibration{
 			PanPolyCoeffs:  [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 			TiltPolyCoeffs: [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
@@ -726,9 +660,9 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues PTZVa
 		return fmt.Errorf("failed to get onvif PTZ client: %w", err)
 	}
 
-	panSpeed := t.panSpeed
-	tiltSpeed := t.tiltSpeed
-	zoomSpeed := t.zoomSpeed
+	panSpeed := 1
+	tiltSpeed := 1
+	zoomSpeed := 1
 
 	currentPTZValues, err := t.getCameraCurrentPTZStatus(ctx)
 	if err != nil {
@@ -753,120 +687,19 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues PTZVa
 	// Calculate deltas to current position for speed calculation
 	panDeltaNormalized := math.Abs(ptzValues.Pan - currentPTZValues.Pan)
 	tiltDeltaNormalized := math.Abs(ptzValues.Tilt - currentPTZValues.Tilt)
-	zoomDeltaNormalized := math.Abs(ptzValues.Zoom - currentPTZValues.Zoom)
 	// Deadzone check: skip move if target is within deadzone of current position
 	// Deadzone is in normalized [0, 1] range (e.g., 0.01 = 1% of the full range)
 	if t.deadzone > 0 {
 		if panDeltaNormalized < t.deadzone && tiltDeltaNormalized < t.deadzone {
 			t.logger.Debugf("Skipping move - within deadzone: pan_delta=%.4f (deadzone=%.4f), tilt_delta=%.4f (deadzone=%.4f)", panDeltaNormalized, t.deadzone, tiltDeltaNormalized, t.deadzone)
-			// Update last sent position even though we skipped
-			t.lastSentTZValues.Pan = ptzValues.Pan
-			t.lastSentTZValues.Tilt = ptzValues.Tilt
-			t.lastSentTZValues.Zoom = ptzValues.Zoom
 			return nil
 		}
 	}
 
-	// Threshold: skip move if delta to current position is very small (< 0.001 normalized)
-	const moveThresholdNormalized = 0.001
-
-	if panDeltaNormalized < moveThresholdNormalized && tiltDeltaNormalized < moveThresholdNormalized {
-		t.logger.Debugf("Skipping move - already at target: pan=%.3f (delta=%.4f), tilt=%.3f (delta=%.4f)", ptzValues.Pan, panDeltaNormalized, ptzValues.Tilt, tiltDeltaNormalized)
-		// Update last sent ptzValues even though we skipped
-		t.lastSentTZValues = ptzValues
-		return nil
-	}
-
-	// Variables to store speed calculation details for logging
-	var panDeltaDegrees, panRequiredSpeedDegreesPerSecond float64
-	var tiltDeltaDegrees, tiltRequiredSpeedDegreesPerSecond float64
-
-	// If the user has not set a fixed pan speed, calculate it based on the required angle change and available time
-	if panSpeed == 0 {
-		// Calculate speed based on required angle change and available time
-		// panDeltaNormalized already calculated above
-		// 2. Convert to degrees: normalized [-1, 1] maps to [panMinDeg, panMaxDeg]
-		panRangeDegrees := t.panMaxDeg - t.panMinDeg
-		panDeltaDegrees = panDeltaNormalized * panRangeDegrees / 2.0
-		// 3. Calculate time available (period between updates)
-		timeAvailableSeconds := 1.0 / t.updateRateHz
-		// 4. Calculate required speed in degrees/second
-		panRequiredSpeedDegreesPerSecond = panDeltaDegrees / timeAvailableSeconds
-		// 5. Map to normalized speed [0, 1] based on min/max speed configuration
-		// If required speed is less than min, use min. If greater than max, use max (clamped to 1.0)
-		if panRequiredSpeedDegreesPerSecond <= t.panMinSpeedDegreesPerSecond {
-			panSpeed = 0.0
-		} else if panRequiredSpeedDegreesPerSecond >= t.panMaxSpeedDegreesPerSecond {
-			panSpeed = 1.0
-		} else {
-			// Linear interpolation between min and max speeds
-			speedRange := t.panMaxSpeedDegreesPerSecond - t.panMinSpeedDegreesPerSecond
-			if speedRange > 0 {
-				panSpeed = (panRequiredSpeedDegreesPerSecond - t.panMinSpeedDegreesPerSecond) / speedRange
-			} else {
-				panSpeed = 0.0
-			}
-		}
-		// Clamp to [0.0, 1.0] as ONVIF expects normalized speeds
-		panSpeed = math.Max(0.0, math.Min(1.0, panSpeed))
-	}
-	// If the user has not set a fixed tilt speed, calculate it based on the required angle change and available time
-	if tiltSpeed == 0 {
-		// Calculate speed based on required angle change and available time
-		// tiltDeltaNormalized already calculated above
-		// 2. Convert to degrees: normalized [-1, 1] maps to [tiltMinDeg, tiltMaxDeg]
-		tiltRangeDegrees := t.tiltMaxDeg - t.tiltMinDeg
-		tiltDeltaDegrees = tiltDeltaNormalized * tiltRangeDegrees / 2.0
-		// 3. Calculate time available (period between updates)
-		timeAvailableSeconds := 1.0 / t.updateRateHz
-		// 4. Calculate required speed in degrees/second
-		tiltRequiredSpeedDegreesPerSecond = tiltDeltaDegrees / timeAvailableSeconds
-		// 5. Map to normalized speed [0, 1] based on min/max speed configuration
-		if tiltRequiredSpeedDegreesPerSecond <= t.tiltMinSpeedDegreesPerSecond {
-			tiltSpeed = 0.0
-		} else if tiltRequiredSpeedDegreesPerSecond >= t.tiltMaxSpeedDegreesPerSecond {
-			tiltSpeed = 1.0
-		} else {
-			// Linear interpolation between min and max speeds
-			speedRange := t.tiltMaxSpeedDegreesPerSecond - t.tiltMinSpeedDegreesPerSecond
-			if speedRange > 0 {
-				tiltSpeed = (tiltRequiredSpeedDegreesPerSecond - t.tiltMinSpeedDegreesPerSecond) / speedRange
-			} else {
-				tiltSpeed = 0.0
-			}
-		}
-		// Clamp to [0.0, 1.0] as ONVIF expects normalized speeds
-		tiltSpeed = math.Max(0.0, math.Min(1.0, tiltSpeed))
-	}
-	// If the user has not set a fixed zoom speed, we will simply use the max speed
-	if t.zoomSpeed == 0 {
-		if zoomDeltaNormalized < t.deadzone {
-			zoomSpeed = 0.0
-		} else {
-			zoomSpeed = 1
-		}
-	}
-	// Ensure zoom speed is also clamped
-	zoomSpeed = math.Max(0.0, math.Min(1.0, zoomSpeed))
-
-	// Skip move if both pan and tilt speeds are effectively zero (very small movements)
-	// Threshold of 0.01 means we skip movements requiring less than 1% of max speed
-	// Also skip if the maximum of pan/tilt speeds is very small (< 0.02)
-	const minEffectiveSpeed = 0.01
-	const minMaxSpeed = 0.02
-	maxSpeed := math.Max(panSpeed, tiltSpeed)
-	if (panSpeed < minEffectiveSpeed && tiltSpeed < minEffectiveSpeed || maxSpeed < minMaxSpeed) &&
-		math.Abs(ptzValues.Zoom-t.lastSentTZValues.Zoom) < samePositionThresholdNormalized {
-		t.logger.Debugf("Sending absolute move: Skipping move - speeds too small: pan_speed=%.4f, tilt_speed=%.4f, max_speed=%.4f", panSpeed, tiltSpeed, maxSpeed)
-		// Update last sent ptzValues even though we skipped
-		t.lastSentTZValues = ptzValues
-		return nil
-	}
-
 	// Comprehensive debug log with all information
-	t.logger.Debugf("Sending absolute move: target pan=%.3f (current=%.3f, delta=%.4f norm/%.2f deg, req_speed=%.2f deg/s, speed_range=[%.2f,%.2f] deg/s, norm_speed=%.3f), target tilt=%.3f (current=%.3f, delta=%.4f norm/%.2f deg, req_speed=%.2f deg/s, speed_range=[%.2f,%.2f] deg/s, norm_speed=%.3f), zoom=%.3f, speeds: pan=%.3f tilt=%.3f zoom=%.3f",
-		ptzValues.Pan, t.lastSentTZValues.Pan, panDeltaNormalized, panDeltaDegrees, panRequiredSpeedDegreesPerSecond, t.panMinSpeedDegreesPerSecond, t.panMaxSpeedDegreesPerSecond, panSpeed,
-		ptzValues.Tilt, t.lastSentTZValues.Tilt, tiltDeltaNormalized, tiltDeltaDegrees, tiltRequiredSpeedDegreesPerSecond, t.tiltMinSpeedDegreesPerSecond, t.tiltMaxSpeedDegreesPerSecond, tiltSpeed,
+	t.logger.Debugf("Sending absolute move: target pan=%.3f (current=%.3f, delta=%.4f norm, speed=%.3f), target tilt=%.3f (current=%.3f, delta=%.4f norm, speed=%.3f), zoom=%.3f, speeds: pan=%.3f tilt=%.3f zoom=%.3f",
+		ptzValues.Pan, t.lastSentTZValues.Pan, panDeltaNormalized, panSpeed,
+		ptzValues.Tilt, t.lastSentTZValues.Tilt, tiltDeltaNormalized, tiltSpeed,
 		ptzValues.Zoom, panSpeed, tiltSpeed, zoomSpeed)
 	_, err = onvifPTZClient.DoCommand(ctx, map[string]interface{}{
 		"command":       "absolute-move",
@@ -998,7 +831,7 @@ func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt fl
 	return pan, tilt, nil
 }
 
-func (t *componentTracker) predictPanTiltZoom(ctx context.Context, pos r3.Vector) (ptzValues PTZValues, err error) {
+func (t *componentTracker) predictPanTiltZoom(ctx context.Context, targetPos r3.Vector) (ptzValues PTZValues, err error) {
 	cameraPose, err := t.getCameraPose(ctx)
 	if err != nil {
 		return PTZValues{}, fmt.Errorf("failed to get camera pose: %w", err)
@@ -1006,15 +839,15 @@ func (t *componentTracker) predictPanTiltZoom(ctx context.Context, pos r3.Vector
 	cameraPos := cameraPose.Pose().Point()
 	switch t.cfg.TrackingMode {
 	case "polynomial-fit":
-		ptzValues.Pan, ptzValues.Tilt, err = t.predictPanTiltPolynomial(pos)
+		ptzValues.Pan, ptzValues.Tilt, err = t.predictPanTiltPolynomial(targetPos)
 		if err != nil {
 			return PTZValues{}, err
 		}
 	case "absolute-position":
-		ptzValues.Pan, ptzValues.Tilt = t.predictPanTiltAbsolute(pos, cameraPos, t.absoluteCalibrationPanPlane, t.absoluteCalibrationPan0Reference)
+		ptzValues.Pan, ptzValues.Tilt = t.predictPanTiltAbsolute(targetPos, cameraPos, t.absoluteCalibrationPanPlane, t.absoluteCalibrationPan0Reference)
 		return PTZValues{}, errors.New("invalid tracking mode: " + t.cfg.TrackingMode)
 	}
-	ptzValues.Zoom = t.calculateZoom(ctx, pos, cameraPos)
+	ptzValues.Zoom = t.calculateZoom(ctx, targetPos, cameraPos)
 	return ptzValues, nil
 }
 func (t *componentTracker) calculateZoom(ctx context.Context, pos r3.Vector, cameraPos r3.Vector) float64 {
