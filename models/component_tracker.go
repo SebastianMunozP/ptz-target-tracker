@@ -517,8 +517,6 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		t.samples = loadedSamples
 		t.logger.Infof("Loaded %d samples", len(t.samples))
 
-		t.fitPolynomial()
-
 		return map[string]interface{}{
 			"status":  "success",
 			"samples": len(t.samples),
@@ -554,7 +552,6 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		t.logger.Infof("Sample %d: (%.1f, %.1f, %.1f) → pan=%.4f, tilt=%.4f",
 			len(t.samples), targetPos.X, targetPos.Y, targetPos.Z, ptzValues.Pan, ptzValues.Tilt)
 		lastSample := t.samples[len(t.samples)-1]
-		t.fitPolynomial()
 		return map[string]interface{}{
 			"sample_number": len(t.samples),
 			"target":        map[string]interface{}{"x": lastSample.TargetPos.X, "y": lastSample.TargetPos.Y, "z": lastSample.TargetPos.Z},
@@ -568,12 +565,13 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			return nil, fmt.Errorf("no samples to remove")
 		}
 		t.samples = t.samples[:len(t.samples)-1]
-		t.fitPolynomial()
 		return map[string]interface{}{"status": "removed", "index": len(t.samples)}, nil
 
 	case "clear-calibration":
 		t.calibration.IsCalibrated = false
-		t.fitPolynomial()
+		t.samples = []TrackingSample{}
+		t.calibration.PanPolyCoeffs = [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+		t.calibration.TiltPolyCoeffs = [10]float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 		return map[string]interface{}{"status": "cleared"}, nil
 
 	case "compute-polynomial":
@@ -581,7 +579,13 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			return nil, fmt.Errorf("need at least 10 samples for polynomial fit, have %d", len(t.samples))
 		}
 
-		panErr, tiltErr := t.fitPolynomial()
+		panErr, tiltErr, err := t.fitPolynomial()
+		if err != nil {
+			return map[string]interface{}{
+				"status": "error",
+				"error":  err.Error(),
+			}, nil
+		}
 
 		return map[string]interface{}{
 			"status":           "success",
@@ -884,14 +888,17 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues PTZVa
 }
 
 // Fit: pan = Ax² + By² + Cz² + Dxy + Exz + Fyz + Gx + Hy + Iz + J
-func (t *componentTracker) fitPolynomial() (panError, tiltError float64) {
+func (t *componentTracker) fitPolynomial() (panError, tiltError float64, err error) {
 	t.calibration.PanPolyCoeffs = t.fitPolynomialSingle(func(s TrackingSample) float64 { return s.Pan })
 	t.calibration.TiltPolyCoeffs = t.fitPolynomialSingle(func(s TrackingSample) float64 { return s.Tilt })
 
 	// Calculate errors
 	var panErrSum, tiltErrSum float64
 	for _, s := range t.samples {
-		predPan, predTilt := t.predictPanTiltPolynomial(s.TargetPos)
+		predPan, predTilt, err := t.predictPanTiltPolynomial(s.TargetPos)
+		if err != nil {
+			return 0, 0, fmt.Errorf("failed to predict pan/tilt for error calculation: %w", err)
+		}
 		panErrSum += math.Abs(predPan - s.Pan)
 		tiltErrSum += math.Abs(predTilt - s.Tilt)
 	}
@@ -903,7 +910,7 @@ func (t *componentTracker) fitPolynomial() (panError, tiltError float64) {
 	t.logger.Infof("Polynomial fit complete: avg error pan=%.5f, tilt=%.5f", panError, tiltError)
 
 	t.calibration.IsCalibrated = true
-	return panError, tiltError
+	return panError, tiltError, nil
 }
 
 func solveLinearSystem10x10(A [10][10]float64, b [10]float64) [10]float64 {
@@ -967,7 +974,7 @@ func (t *componentTracker) fitPolynomialSingle(getValue func(TrackingSample) flo
 	return solveLinearSystem10x10(XtX, XtY)
 }
 
-func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt float64) {
+func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt float64, err error) {
 	x, y, z := pos.X, pos.Y, pos.Z
 	features := [10]float64{
 		x * x, y * y, z * z,
@@ -976,11 +983,19 @@ func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt fl
 	}
 
 	pan, tilt = 0, 0
-	for i := 0; i < 10; i++ {
+	if len(t.calibration.PanPolyCoeffs) != len(t.calibration.TiltPolyCoeffs) {
+		t.logger.Errorf("Calibration polynomial coefficient length mismatch: pan=%d, tilt=%d", len(t.calibration.PanPolyCoeffs), len(t.calibration.TiltPolyCoeffs))
+		return 0, 0, fmt.Errorf("calibration polynomial coefficient length mismatch")
+	}
+	if len(features) != len(t.calibration.PanPolyCoeffs) {
+		t.logger.Errorf("Feature length mismatch: features=%d, pan_coeffs=%d", len(features), len(t.calibration.PanPolyCoeffs))
+		return 0, 0, fmt.Errorf("feature length mismatch")
+	}
+	for i := range features {
 		pan += t.calibration.PanPolyCoeffs[i] * features[i]
 		tilt += t.calibration.TiltPolyCoeffs[i] * features[i]
 	}
-	return pan, tilt
+	return pan, tilt, nil
 }
 
 func (t *componentTracker) predictPanTiltZoom(ctx context.Context, pos r3.Vector) (ptzValues PTZValues, err error) {
@@ -991,7 +1006,10 @@ func (t *componentTracker) predictPanTiltZoom(ctx context.Context, pos r3.Vector
 	cameraPos := cameraPose.Pose().Point()
 	switch t.cfg.TrackingMode {
 	case "polynomial-fit":
-		ptzValues.Pan, ptzValues.Tilt = t.predictPanTiltPolynomial(pos)
+		ptzValues.Pan, ptzValues.Tilt, err = t.predictPanTiltPolynomial(pos)
+		if err != nil {
+			return PTZValues{}, err
+		}
 	case "absolute-position":
 		ptzValues.Pan, ptzValues.Tilt = t.predictPanTiltAbsolute(pos, cameraPos, t.absoluteCalibrationPanPlane, t.absoluteCalibrationPan0Reference)
 		return PTZValues{}, errors.New("invalid tracking mode: " + t.cfg.TrackingMode)
