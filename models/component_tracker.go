@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/golang/geo/r3"
@@ -160,10 +158,7 @@ type componentTracker struct {
 	trackingMode                     string
 	absoluteCalibrationPanPlane      r3.Vector
 	absoluteCalibrationPan0Reference r3.Vector // Direction in panPlane that corresponds to pan=0
-
-	workerMutex   sync.Mutex
-	worker        *utils.StoppableWorkers
-	workerRunning atomic.Bool
+	worker                           *utils.StoppableWorkers
 }
 
 // Close implements resource.Resource.
@@ -238,13 +233,7 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 
 	if conf.EnableOnStart {
 		s.logger.Info("Starting PTZ component tracker on start")
-		s.worker.Add(func(workerCtx context.Context) {
-			timeoutCtx, cancel := context.WithTimeout(workerCtx, time.Hour*24)
-			defer cancel()
-			defer s.workerRunning.Store(false)
-			s.workerRunning.Store(true)
-			s.trackingLoop(timeoutCtx)
-		})
+		s.worker.Add(s.trackingLoop)
 		s.logger.Info("PTZ component tracker started")
 	}
 
@@ -514,9 +503,6 @@ func (t *componentTracker) trackingLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !t.workerRunning.Load() {
-				continue
-			}
 			err := t.trackTarget(ctx)
 			if err != nil {
 				t.logger.Errorf("Failed to track target: %v", err)
@@ -594,7 +580,7 @@ func (t *componentTracker) fitPolynomial() (panError, tiltError float64, err err
 	// Calculate errors
 	var panErrSum, tiltErrSum float64
 	for _, s := range t.samples {
-		predPan, predTilt, err := t.predictPanTiltPolynomial(s.TargetPos)
+		predPan, predTilt, err := t.calculatePanTiltPolynomial(s.TargetPos)
 		if err != nil {
 			return 0, 0, fmt.Errorf("failed to predict pan/tilt for error calculation: %w", err)
 		}
@@ -675,7 +661,7 @@ func (t *componentTracker) fitPolynomialSingle(getValue func(TrackingSample) flo
 	return coeffs[:]
 }
 
-func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt float64, err error) {
+func (t *componentTracker) calculatePanTiltPolynomial(pos r3.Vector) (pan, tilt float64, err error) {
 	x, y, z := pos.X, pos.Y, pos.Z
 	features := [10]float64{
 		x * x, y * y, z * z,
@@ -699,13 +685,13 @@ func (t *componentTracker) predictPanTiltPolynomial(pos r3.Vector) (pan, tilt fl
 	return pan, tilt, nil
 }
 
-func (t *componentTracker) predictPanTiltZoom(ctx context.Context, targetPos r3.Vector) (ptzValues PTZValues, err error) {
+func (t *componentTracker) calculatePanTiltZoom(ctx context.Context, targetPos r3.Vector) (ptzValues PTZValues, err error) {
 	cameraPose, err := t.getPose(ctx, t.cfg.PTZCameraName)
 	if err != nil {
 		return PTZValues{}, fmt.Errorf("failed to get camera pose: %w", err)
 	}
 	cameraPos := cameraPose.Pose().Point()
-	ptzValues.Pan, ptzValues.Tilt, err = t.predictPanTiltPolynomial(targetPos)
+	ptzValues.Pan, ptzValues.Tilt, err = t.calculatePanTiltPolynomial(targetPos)
 	if err != nil {
 		return PTZValues{}, err
 	}
@@ -753,7 +739,7 @@ func (t *componentTracker) trackTarget(ctx context.Context) error {
 	}
 	targetPos := targetPose.Pose().Point()
 
-	ptzValues, err := t.predictPanTiltZoom(ctx, targetPos)
+	ptzValues, err := t.calculatePanTiltZoom(ctx, targetPos)
 	if err != nil {
 		t.logger.Errorf("Failed to predict pan/tilt/zoom: %v", err)
 		return err
