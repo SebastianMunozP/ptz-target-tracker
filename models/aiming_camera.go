@@ -61,7 +61,7 @@ func newAimingCamera(ctx context.Context, deps resource.Dependencies, rawConf re
 	}
 
 	// Get underlying camera
-	cam, err := camera.FromDependencies(deps, conf.CameraName)
+	cam, err := camera.FromProvider(deps, conf.CameraName)
 	if err != nil {
 		return nil, err
 	}
