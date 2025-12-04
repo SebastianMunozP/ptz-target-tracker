@@ -129,6 +129,11 @@ type Calibration struct {
 	TiltPolyCoeffs []float64 `json:"tilt_poly_coeffs"`
 	IsCalibrated   bool      `json:"is_calibrated"`
 }
+
+const PAN_SPEED = 1.0
+const TILT_SPEED = 1.0
+const ZOOM_SPEED = 1.0
+
 type componentTracker struct {
 	resource.AlwaysRebuild
 	name resource.Name
@@ -155,7 +160,6 @@ type componentTracker struct {
 	maxZoomDistance                  float64
 	minZoomValue                     float64
 	maxZoomValue                     float64
-	trackingMode                     string
 	absoluteCalibrationPanPlane      r3.Vector
 	absoluteCalibrationPan0Reference r3.Vector // Direction in panPlane that corresponds to pan=0
 	worker                           *utils.StoppableWorkers
@@ -502,31 +506,12 @@ func (t *componentTracker) trackingLoop(ctx context.Context) {
 }
 
 func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues PTZValues) error {
-	panSpeed := 1
-	tiltSpeed := 1
-	zoomSpeed := 1
-
 	currentPTZValues, err := t.getCameraCurrentPTZStatus(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get current PTZ status: %w", err)
 	}
 
-	// Check if we're sending the same absolute position as last time (idempotent check)
-	panDeltaFromLastSent := math.Abs(ptzValues.Pan - t.lastSentTZValues.Pan)
-	tiltDeltaFromLastSent := math.Abs(ptzValues.Tilt - t.lastSentTZValues.Tilt)
-	zoomDeltaFromLastSent := math.Abs(ptzValues.Zoom - t.lastSentTZValues.Zoom)
-
-	// Threshold: skip move if we're sending the same absolute position (< 0.001 normalized)
-	const samePositionThresholdNormalized = 0.001
-
-	if panDeltaFromLastSent < samePositionThresholdNormalized &&
-		tiltDeltaFromLastSent < samePositionThresholdNormalized &&
-		zoomDeltaFromLastSent < samePositionThresholdNormalized {
-		t.logger.Debugf("Skipping move - same absolute position as last sent: pan=%.3f, tilt=%.3f, zoom=%.3f", ptzValues.Pan, ptzValues.Tilt, ptzValues.Zoom)
-		return nil
-	}
-
-	// Calculate deltas to current position for speed calculation
+	// Calculate deltas to from currentPTZValues to the future PTZValues, if they are within deadzone, skip move
 	panDeltaNormalized := math.Abs(ptzValues.Pan - currentPTZValues.Pan)
 	tiltDeltaNormalized := math.Abs(ptzValues.Tilt - currentPTZValues.Tilt)
 	// Deadzone check: skip move if target is within deadzone of current position
@@ -540,23 +525,22 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues PTZVa
 
 	// Comprehensive debug log with all information
 	t.logger.Debugf("Sending absolute move: target pan=%.3f (current=%.3f, delta=%.4f norm, speed=%.3f), target tilt=%.3f (current=%.3f, delta=%.4f norm, speed=%.3f), zoom=%.3f, speeds: pan=%.3f tilt=%.3f zoom=%.3f",
-		ptzValues.Pan, t.lastSentTZValues.Pan, panDeltaNormalized, panSpeed,
-		ptzValues.Tilt, t.lastSentTZValues.Tilt, tiltDeltaNormalized, tiltSpeed,
-		ptzValues.Zoom, panSpeed, tiltSpeed, zoomSpeed)
+		ptzValues.Pan, t.lastSentTZValues.Pan, panDeltaNormalized, PAN_SPEED,
+		ptzValues.Tilt, t.lastSentTZValues.Tilt, tiltDeltaNormalized, TILT_SPEED,
+		ptzValues.Zoom, PAN_SPEED, TILT_SPEED, ZOOM_SPEED)
 	_, err = t.onvifPTZClient.DoCommand(ctx, map[string]interface{}{
 		"command":       "absolute-move",
 		"pan_position":  ptzValues.Pan,
 		"tilt_position": ptzValues.Tilt,
 		"zoom_position": ptzValues.Zoom,
-		"pan_speed":     panSpeed,
-		"tilt_speed":    tiltSpeed,
-		"zoom_speed":    zoomSpeed,
+		"pan_speed":     PAN_SPEED,
+		"tilt_speed":    TILT_SPEED,
+		"zoom_speed":    ZOOM_SPEED,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to send absolute move: %w", err)
 	}
 
-	// Update last sent positions (absolute positions are idempotent)
 	t.lastSentTZValues = ptzValues
 
 	return nil
@@ -685,10 +669,10 @@ func (t *componentTracker) calculatePanTiltZoom(ctx context.Context, targetPos r
 	if err != nil {
 		return PTZValues{}, err
 	}
-	ptzValues.Zoom = t.calculateZoom(ctx, targetPos, cameraPos)
+	ptzValues.Zoom = t.calculateZoom(targetPos, cameraPos)
 	return ptzValues, nil
 }
-func (t *componentTracker) calculateZoom(ctx context.Context, pos r3.Vector, cameraPos r3.Vector) float64 {
+func (t *componentTracker) calculateZoom(pos r3.Vector, cameraPos r3.Vector) float64 {
 	distance := pos.Distance(cameraPos)
 	t.logger.Debugf("calculateZoom: calculating zoom for distance: %.2f mm, minZoomDistance: %.2f mm, maxZoomDistance: %.2f mm, minZoomValue: %.2f, maxZoomValue: %.2f\n", distance, t.minZoomDistance, t.maxZoomDistance, t.minZoomValue, t.maxZoomValue)
 
@@ -719,17 +703,17 @@ func (t *componentTracker) calculateZoom(ctx context.Context, pos r3.Vector, cam
 
 func (t *componentTracker) trackTarget(ctx context.Context) error {
 	// Only require calibration for polynomial-fit mode
-	if t.trackingMode == "polynomial-fit" && !t.calibration.IsCalibrated {
-		return errors.New("not calibrated - run fit-polynomial-calibration first")
+	if !t.calibration.IsCalibrated {
+		return errors.New("not calibrated - run compute-polynomial first")
 	}
 
 	targetPose, err := t.getPose(ctx, t.targetComponentName)
 	if err != nil {
 		return err
 	}
-	targetPos := targetPose.Pose().Point()
+	targetPosition := targetPose.Pose().Point()
 
-	ptzValues, err := t.calculatePanTiltZoom(ctx, targetPos)
+	ptzValues, err := t.calculatePanTiltZoom(ctx, targetPosition)
 	if err != nil {
 		t.logger.Errorf("Failed to predict pan/tilt/zoom: %v", err)
 		return err
