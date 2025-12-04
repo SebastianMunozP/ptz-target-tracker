@@ -191,16 +191,6 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		return nil, fmt.Errorf("failed to get frame system service: %w", err)
 	}
 
-	_, err = frameSystemService.GetPose(ctx, conf.TargetComponentName, "", []*referenceframe.LinkInFrame{}, map[string]interface{}{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get target pose: %w", err)
-	}
-
-	_, err = frameSystemService.GetPose(ctx, conf.PTZCameraName, "", []*referenceframe.LinkInFrame{}, map[string]interface{}{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get PTZ camera pose: %w", err)
-	}
-
 	s := &componentTracker{
 		name:                name,
 		logger:              logger,
@@ -245,9 +235,9 @@ func (s *componentTracker) Name() resource.Name {
 }
 
 func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	t.logger.Infof("DoCommand: %+v", cmd)
+	t.logger.Debugf("DoCommand: %+v", cmd)
 	if t.cfg.EnableOnStart {
-		return nil, errors.New("component is already running on start")
+		return nil, errors.New("cannot execute commands while component is running")
 	}
 	switch cmd["command"] {
 	case "get-calibration-samples":
