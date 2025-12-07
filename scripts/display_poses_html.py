@@ -48,6 +48,24 @@ def main():
         type=str,
         help='JSON file containing obstacle bounding boxes (optional)'
     )
+    parser.add_argument(
+        '--ee-x',
+        type=float,
+        default=100.0,
+        help='End effector size in X dimension in mm (default: 100)'
+    )
+    parser.add_argument(
+        '--ee-y',
+        type=float,
+        default=100.0,
+        help='End effector size in Y dimension in mm (default: 100)'
+    )
+    parser.add_argument(
+        '--ee-z',
+        type=float,
+        default=0.0,
+        help='End effector size in Z dimension (extending below mounting point) in mm (default: 0)'
+    )
     
     args = parser.parse_args()
     
@@ -113,6 +131,24 @@ def main():
             'name': f'pose_{i}'
         })
         geometry_index += 1
+        
+        # Add end effector box at this pose
+        if args.ee_x > 0 or args.ee_y > 0 or args.ee_z > 0:
+            ee_size = [args.ee_x, args.ee_y, args.ee_z if args.ee_z > 0 else 10]
+            ee_box = trimesh.creation.box(extents=ee_size)
+            # Position the box: center at pose point - [0, 0, z/2]
+            # This makes the top of the box at the pose point, extending downward in Z
+            ee_center = [position[0], position[1], position[2] - ee_size[2]/2]
+            ee_box.apply_translation(ee_center)
+            ee_box.visual.vertex_colors = [255, 255, 0, 150]  # Yellow, semi-transparent
+            scene.add_geometry(ee_box, node_name=f'end_effector_{i}')
+            geometry_metadata.append({
+                'index': geometry_index,
+                'type': 'end_effector',
+                'name': f'end_effector_{i}',
+                'pose_index': i
+            })
+            geometry_index += 1
     
     # Add sphere at arm base position
     base_sphere = trimesh.creation.icosphere(radius=40)  # Slightly larger
@@ -278,6 +314,10 @@ def main():
             Pose Spheres
         </label>
         <label>
+            <input type="checkbox" id="toggle-end-effectors" checked>
+            End Effectors
+        </label>
+        <label>
             <input type="checkbox" id="toggle-origin" checked>
             Arm Base
         </label>
@@ -310,6 +350,7 @@ def main():
         let scene, camera, renderer, controls;
         let raycaster, mouse, tooltip;
         let poseSpheres = [];
+        let endEffectors = [];
         let obstacleBoxes = [];
         let meshObjects = [];
         let originSphere = null;
@@ -375,6 +416,21 @@ def main():
                             child.userData.isPose = true;
                             poseSpheres.push(child);
                             console.log('Added pose sphere to array');
+                        }} else if (meshType === 'end_effector') {{
+                            child.material = new THREE.MeshStandardMaterial({{
+                                color: 0xFFFF00,
+                                emissive: 0x888800,
+                                emissiveIntensity: 0.2,
+                                transparent: true,
+                                opacity: 0.6,
+                                side: THREE.DoubleSide,
+                                metalness: 0.1,
+                                roughness: 0.8
+                            }});
+                            child.userData.isEndEffector = true;
+                            child.userData.poseIndex = metadata.pose_index;
+                            endEffectors.push(child);
+                            console.log('Added end effector box to array');
                         }} else if (meshType === 'origin') {{
                             child.material = new THREE.MeshStandardMaterial({{
                                 color: 0x90EE90,
@@ -456,6 +512,7 @@ def main():
                 
                 console.log('Loaded', meshIndex, 'meshes total');
                 console.log('Pose spheres:', poseSpheres.length);
+                console.log('End effectors:', endEffectors.length);
                 console.log('Origin sphere:', originSphere ? 'yes' : 'no');
                 console.log('Reach sphere:', reachSphere ? 'yes' : 'no');
                 console.log('Obstacles:', obstacleBoxes.length);
@@ -486,6 +543,10 @@ def main():
             
             document.getElementById('toggle-poses').addEventListener('change', function(e) {{
                 poseSpheres.forEach(obj => obj.visible = e.target.checked);
+            }});
+            
+            document.getElementById('toggle-end-effectors').addEventListener('change', function(e) {{
+                endEffectors.forEach(obj => obj.visible = e.target.checked);
             }});
             
             document.getElementById('toggle-origin').addEventListener('change', function(e) {{

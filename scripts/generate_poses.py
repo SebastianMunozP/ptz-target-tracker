@@ -42,15 +42,77 @@ def load_obstacles(obstacles_file):
     return parsed_obstacles
 
 
-def check_collision_with_obstacles(pose_point, ee_length, ee_width, ee_depth, ee_clearance, obstacles):
+def find_highest_obstacle_beneath(x, y, ee_x, ee_y, ee_z, ee_clearance, obstacles):
+    """
+    Find the highest obstacle that would be beneath the end effector at position (x, y).
+    
+    Args:
+        x, y: XY position of the pose
+        ee_x: Size of end effector in mm (X dimension)
+        ee_y: Size of end effector in mm (Y dimension)
+        ee_z: Size of end effector extending downward in mm (Z dimension)
+        ee_clearance: Additional safety clearance around end effector in mm
+        obstacles: List of obstacle dictionaries with 'center' and 'dims'
+    
+    Returns:
+        tuple: (adjusted_pose_z, obstacle_label) - Z coordinate where pose should be placed so 
+               end effector bottom sits at obstacle top + clearance, or (None, None)
+    """
+    if not obstacles:
+        return None, None
+    
+    # End effector footprint in XY (with clearance)
+    ee_x_with_clearance = ee_x + 2 * ee_clearance
+    ee_y_with_clearance = ee_y + 2 * ee_clearance
+    
+    highest_obs_top_z = None
+    highest_label = None
+    
+    for obs in obstacles:
+        obs_center = obs['center']
+        obs_dims = obs['dims']
+        
+        # Obstacle bounding box
+        obs_min = obs_center - obs_dims / 2
+        obs_max = obs_center + obs_dims / 2
+        
+        # Check if end effector footprint (centered at x, y) overlaps with obstacle in XY plane
+        ee_min_x = x - ee_x_with_clearance / 2
+        ee_max_x = x + ee_x_with_clearance / 2
+        ee_min_y = y - ee_y_with_clearance / 2
+        ee_max_y = y + ee_y_with_clearance / 2
+        
+        x_overlap = ee_max_x >= obs_min[0] and ee_min_x <= obs_max[0]
+        y_overlap = ee_max_y >= obs_min[1] and ee_min_y <= obs_max[1]
+        
+        if x_overlap and y_overlap:
+            # This obstacle is beneath the end effector
+            obs_top_z = obs_max[2]  # Top of obstacle
+            if highest_obs_top_z is None or obs_top_z > highest_obs_top_z:
+                highest_obs_top_z = obs_top_z
+                highest_label = obs['label']
+    
+    if highest_obs_top_z is not None:
+        # Calculate pose Z so that:
+        # - End effector extends from pose_z down to (pose_z - ee_z)
+        # - Bottom of end effector (pose_z - ee_z) should be at obstacle_top + clearance
+        # Therefore: pose_z - ee_z = obstacle_top + clearance
+        # So: pose_z = obstacle_top + clearance + ee_z
+        adjusted_pose_z = highest_obs_top_z + ee_clearance + ee_z
+        return adjusted_pose_z, highest_label
+    
+    return None, None
+
+
+def check_collision_with_obstacles(pose_point, ee_z, ee_x, ee_y, ee_clearance, obstacles):
     """
     Check if a pose would cause the end effector to collide with any obstacles.
     
     Args:
         pose_point: Position of end effector mounting point (x, y, z) in mm
-        ee_length: Length of end effector extending downward in mm (Z dimension)
-        ee_width: Width of end effector in mm (X dimension)
-        ee_depth: Depth of end effector in mm (Y dimension)
+        ee_z: Size of end effector extending downward in mm (Z dimension)
+        ee_x: Size of end effector in mm (X dimension)
+        ee_y: Size of end effector in mm (Y dimension)
         ee_clearance: Additional safety clearance around end effector in mm
         obstacles: List of obstacle dictionaries with 'center' and 'dims'
     
@@ -60,15 +122,15 @@ def check_collision_with_obstacles(pose_point, ee_length, ee_width, ee_depth, ee
     if not obstacles:
         return False, None
     
-    # End effector is a box from pose_point extending down by ee_length
-    # Center of end effector box is at pose_point - [0, 0, ee_length/2]
-    ee_center = pose_point - np.array([0, 0, ee_length / 2])
+    # End effector is a box from pose_point extending down by ee_z
+    # Center of end effector box is at pose_point - [0, 0, ee_z/2]
+    ee_center = pose_point - np.array([0, 0, ee_z / 2])
     
     # End effector dimensions (including clearance)
     ee_dims = np.array([
-        ee_width + 2 * ee_clearance,
-        ee_depth + 2 * ee_clearance,
-        ee_length
+        ee_x + 2 * ee_clearance,
+        ee_y + 2 * ee_clearance,
+        ee_z
     ])
     
     # End effector bounding box
@@ -171,24 +233,24 @@ Examples:
     )
     
     parser.add_argument(
-        '--ee-length',
+        '--ee-x',
+        type=float,
+        default=100.0,
+        help='End effector size in X dimension in mm (default: 100.0)'
+    )
+    
+    parser.add_argument(
+        '--ee-y',
+        type=float,
+        default=100.0,
+        help='End effector size in Y dimension in mm (default: 100.0)'
+    )
+    
+    parser.add_argument(
+        '--ee-z',
         type=float,
         default=0.0,
-        help='End effector length extending below mounting point in mm (Z dimension, default: 0.0)'
-    )
-    
-    parser.add_argument(
-        '--ee-width',
-        type=float,
-        default=100.0,
-        help='End effector width in mm (X dimension, default: 100.0)'
-    )
-    
-    parser.add_argument(
-        '--ee-depth',
-        type=float,
-        default=100.0,
-        help='End effector depth in mm (Y dimension, default: 100.0)'
+        help='End effector size in Z dimension (extending below mounting point) in mm (default: 0.0)'
     )
     
     parser.add_argument(
@@ -235,7 +297,7 @@ Examples:
     print(f"  Safety height above mesh: {safety_height_mm:.1f} mm")
     print(f"  Maximum arm reach: {MAX_REACH:.1f} mm")
     print(f"  Arm base position: [{arm_base[0]:.1f}, {arm_base[1]:.1f}, {arm_base[2]:.1f}] mm")
-    print(f"  End effector dimensions: {args.ee_width:.1f} x {args.ee_depth:.1f} x {args.ee_length:.1f} mm (W x D x L)")
+    print(f"  End effector dimensions: {args.ee_x:.1f} x {args.ee_y:.1f} x {args.ee_z:.1f} mm (X x Y x Z)")
     print(f"  End effector clearance: {args.ee_clearance:.1f} mm")
     print(f"  Obstacles: {len(obstacles)}")
     print(f"  Mesh file: {args.mesh}")
@@ -357,7 +419,18 @@ Examples:
     print(f"\nGenerating lower layer poses:")
     for y in y_positions_lower:
         for x in x_positions_lower:
-            z = z_layers[0]
+            z = z_layers[0]  # Start with default lower layer Z
+            
+            # Check if there's an obstacle beneath this XY position
+            obstacle_adjusted_z, obstacle_label = find_highest_obstacle_beneath(
+                x, y, args.ee_x, args.ee_y, args.ee_z, args.ee_clearance, obstacles
+            )
+            
+            if obstacle_adjusted_z is not None:
+                # Use adjusted Z so end effector bottom sits on top of obstacle (with clearance)
+                print(f"  ⚠ Adjusted Z for obstacle '{obstacle_label}': [{x:.1f}, {y:.1f}] from {z:.1f} to {obstacle_adjusted_z:.1f} mm")
+                z = obstacle_adjusted_z
+            
             # Calculate distance from arm base
             pose_pos = np.array([x, y, z])
             distance = np.linalg.norm(pose_pos - arm_base)
@@ -368,13 +441,13 @@ Examples:
                 print(f"  ✗ Skipped (reach): [{x:.1f}, {y:.1f}, {z:.1f}] mm - Distance {distance:.1f} mm > {MAX_REACH} mm")
                 continue
             
-            # Check collision with obstacles
-            collides, obstacle_label = check_collision_with_obstacles(
-                pose_pos, args.ee_length, args.ee_width, args.ee_depth, args.ee_clearance, obstacles
+            # Final collision check (should pass now, but verify)
+            collides, collision_label = check_collision_with_obstacles(
+                pose_pos, args.ee_z, args.ee_x, args.ee_y, args.ee_clearance, obstacles
             )
             if collides:
                 rejected_by_obstacle += 1
-                print(f"  ✗ Skipped (obstacle): [{x:.1f}, {y:.1f}, {z:.1f}] mm - Collision with {obstacle_label}")
+                print(f"  ✗ Skipped (obstacle): [{x:.1f}, {y:.1f}, {z:.1f}] mm - Collision with {collision_label}")
                 continue
             
             # Default orientation: pointing down (-Z direction)
@@ -439,7 +512,7 @@ Examples:
                 
                 # Check collision with obstacles
                 collides, obstacle_label = check_collision_with_obstacles(
-                    pose_pos, args.ee_length, args.ee_width, args.ee_depth, args.ee_clearance, obstacles
+                    pose_pos, args.ee_z, args.ee_x, args.ee_y, args.ee_clearance, obstacles
                 )
                 if collides:
                     rejected_by_obstacle += 1

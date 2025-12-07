@@ -75,22 +75,22 @@ def main():
         help="JSON file containing obstacle bounding boxes (optional)"
     )
     parser.add_argument(
-        "--ee-length",
+        "--ee-x",
+        type=float,
+        default=100.0,
+        help="End effector size in X dimension in mm (default: 100)"
+    )
+    parser.add_argument(
+        "--ee-y",
+        type=float,
+        default=100.0,
+        help="End effector size in Y dimension in mm (default: 100)"
+    )
+    parser.add_argument(
+        "--ee-z",
         type=float,
         default=0.0,
-        help="End effector length extending below mounting point in mm (Z dimension)"
-    )
-    parser.add_argument(
-        "--ee-width",
-        type=float,
-        default=100.0,
-        help="End effector width in mm (X dimension)"
-    )
-    parser.add_argument(
-        "--ee-depth",
-        type=float,
-        default=100.0,
-        help="End effector depth in mm (Y dimension)"
+        help="End effector size in Z dimension (extending below mounting point) in mm (default: 0)"
     )
     parser.add_argument(
         "--ee-clearance",
@@ -130,9 +130,9 @@ def main():
         "--arm-base-z", str(args.arm_base_z),
         "--mesh", args.mesh,
         "--output", args.output,
-        "--ee-length", str(args.ee_length),
-        "--ee-width", str(args.ee_width),
-        "--ee-depth", str(args.ee_depth),
+        "--ee-x", str(args.ee_x),
+        "--ee-y", str(args.ee_y),
+        "--ee-z", str(args.ee_z),
         "--ee-clearance", str(args.ee_clearance)
     ]
     
@@ -158,7 +158,10 @@ def main():
             "--arm-base-x", str(args.arm_base_x),
             "--arm-base-y", str(args.arm_base_y),
             "--arm-base-z", str(args.arm_base_z),
-            "--mesh", args.mesh
+            "--mesh", args.mesh,
+            "--ee-x", str(args.ee_x),
+            "--ee-y", str(args.ee_y),
+            "--ee-z", str(args.ee_z)
         ]
         
         if args.obstacles:
