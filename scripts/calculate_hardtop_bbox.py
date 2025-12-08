@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
 """
-Calculate hardtop bounding box from mesh file for manual obstacle configuration.
+Calculate hardtop bounding box from mesh file and write obstacles.json output.
 
 Usage:
     # From mesh file (automatic calculation)
     python scripts/calculate_hardtop_bbox.py hardtop.stl
+    python scripts/calculate_hardtop_bbox.py hardtop.stl -o my_obstacles.json
     
-    # From mesh file with custom units
-    python scripts/calculate_hardtop_bbox.py hardtop.ply --units meters
+    # From mesh file with custom units and zones
+    python scripts/calculate_hardtop_bbox.py hardtop.ply --units meters --zones 3
     
     # Manual dimensions (if no mesh file)
     python scripts/calculate_hardtop_bbox.py --manual \
         --center-x 0 --center-y 0 --center-z 250 \
         --width 1000 --length 1000 --height 500
+
+Output:
+    Creates obstacles.json (or custom file with -o) that can be used with:
+    - generate_poses.py --obstacles obstacles.json
+    - calibration_poses.py --obstacles obstacles.json
 """
 
 import argparse
 import sys
+import json
 from pathlib import Path
 import trimesh
 import numpy as np
@@ -170,6 +177,8 @@ Examples:
                        help='Length (Y dimension) in mm (for manual mode)')
     parser.add_argument('--height', type=float,
                        help='Height (Z dimension) in mm (for manual mode)')
+    parser.add_argument('-o', '--output', type=str, default='obstacles.json',
+                       help='Output JSON file (default: obstacles.json)')
     
     args = parser.parse_args()
     
@@ -198,11 +207,38 @@ Examples:
         
         result = calculate_bbox_from_mesh(args.mesh_file, args.units, args.zones)
     
+    # Build obstacles JSON array
+    obstacles = []
+    
     # Print results for each zone
     for zone_idx, zone_data in enumerate(result):
         center_x, center_y, center_z, width, length, height, x_min, x_max, y_min, y_max, z_min, z_max = zone_data
         
         zone_label = f"Zone {zone_idx + 1}" if len(result) > 1 else "Single Box"
+        obstacle_label = f"hardtop_zone{zone_idx + 1}" if len(result) > 1 else "hardtop"
+        
+        # Add to obstacles array
+        obstacle = {
+            "geometry": {
+                "translation": {
+                    "x": 0,
+                    "y": 0,
+                    "z": 0
+                },
+                "type": "box",
+                "x": round(width, 1),
+                "y": round(length, 1),
+                "z": round(height, 1)
+            },
+            "label": obstacle_label,
+            "parent": "world",
+            "translation": {
+                "x": round(center_x, 1),
+                "y": round(center_y, 1),
+                "z": round(center_z, 1)
+            }
+        }
+        obstacles.append(obstacle)
     
         print()
         print("=" * 70)
@@ -256,5 +292,22 @@ Examples:
         print('  }')
         print('}')
         print()
+    
+    # Write obstacles to JSON file
+    output_path = Path(args.output)
+    with open(output_path, 'w') as f:
+        json.dump(obstacles, f, indent=2)
+    
+    print()
+    print("=" * 70)
+    print("OUTPUT")
+    print("=" * 70)
+    print(f"✅ Wrote {len(obstacles)} obstacle(s) to: {output_path}")
+    print()
+    print("You can now use this file with:")
+    print(f"  python scripts/generate_poses.py --obstacles {output_path}")
+    print(f"  python scripts/calibration_poses.py --obstacles {output_path}")
+    print()
+
 if __name__ == '__main__':
     main()

@@ -155,6 +155,10 @@ async def main_async():
     input("Press Enter to start moving through poses...")
     print()
     
+    # Track results
+    visited_poses = []  # List of (index, pose_entry) tuples
+    failed_poses = []   # List of (index, pose_entry, error) tuples
+    
     # Move through poses using CLI
     for i, pose_entry in enumerate(poses):
         try:
@@ -189,10 +193,12 @@ async def main_async():
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
             print("✓ Move completed")
+            visited_poses.append((i, pose_entry))
             if result.stdout.strip():
                 print(result.stdout)
         except subprocess.CalledProcessError as e:
             print(f"✗ Move failed: {e.stderr}")
+            failed_poses.append((i, pose_entry, str(e.stderr)))
             input("Press Enter to continue or Ctrl+C to abort...")
             continue
         
@@ -218,6 +224,47 @@ async def main_async():
     print()
     print("=" * 50)
     print("All poses completed!")
+    print("=" * 50)
+    print()
+    
+    # Print summary
+    print("=" * 50)
+    print("CALIBRATION SUMMARY")
+    print("=" * 50)
+    print(f"Total poses: {total_poses}")
+    print(f"✓ Successful: {len(visited_poses)} ({len(visited_poses)*100.0/total_poses:.1f}%)")
+    print(f"✗ Failed: {len(failed_poses)} ({len(failed_poses)*100.0/total_poses:.1f}%)")
+    print()
+    
+    if visited_poses:
+        print(f"Visited poses ({len(visited_poses)}):")
+        for idx, pose_entry in visited_poses:
+            pose = pose_entry['data']['pose']
+            print(f"  ✓ Pose {idx + 1}: ({pose['x']:.2f}, {pose['y']:.2f}, {pose['z']:.2f})")
+        print()
+    
+    if failed_poses:
+        print(f"Failed poses ({len(failed_poses)}):")
+        for idx, pose_entry, error in failed_poses:
+            pose = pose_entry['data']['pose']
+            print(f"  ✗ Pose {idx + 1}: ({pose['x']:.2f}, {pose['y']:.2f}, {pose['z']:.2f})")
+            # Extract the key error message
+            if "physically unreachable" in error:
+                print(f"     Reason: Position unreachable (IK solver failed)")
+            else:
+                print(f"     Reason: {error.split('desc = ')[-1][:80] if 'desc = ' in error else error[:80]}")
+        print()
+    
+    # Save results to JSON for visualization
+    results_file = args.poses_file.replace('.json', '_results.json')
+    results_data = {
+        'total': total_poses,
+        'visited': [{'index': idx, 'pose': pose_entry} for idx, pose_entry in visited_poses],
+        'failed': [{'index': idx, 'pose': pose_entry, 'error': error} for idx, pose_entry, error in failed_poses]
+    }
+    with open(results_file, 'w') as f:
+        json.dump(results_data, f, indent=2)
+    print(f"Results saved to: {results_file}")
     print("=" * 50)
 
 

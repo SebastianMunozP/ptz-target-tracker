@@ -24,12 +24,6 @@ def main():
         help="Number of poses to generate (12-24 recommended)"
     )
     parser.add_argument(
-        "-s", "--safety-height",
-        type=float,
-        default=50.0,
-        help="Safety clearance above mesh surface (mm)"
-    )
-    parser.add_argument(
         "-r", "--reach",
         type=float,
         default=1700.0,
@@ -108,6 +102,11 @@ def main():
         action="store_true",
         help="Open the visualization in browser after generation"
     )
+    parser.add_argument(
+        "--results",
+        type=str,
+        help="JSON file containing pose execution results (visited/failed poses) for visualization"
+    )
     
     args = parser.parse_args()
     
@@ -123,7 +122,6 @@ def main():
         sys.executable,
         str(script_dir / "generate_poses.py"),
         "--num-poses", str(args.num_poses),
-        "--safety-height", str(args.safety_height),
         "--reach", str(args.reach),
         "--arm-base-x", str(args.arm_base_x),
         "--arm-base-y", str(args.arm_base_y),
@@ -166,6 +164,9 @@ def main():
         
         if args.obstacles:
             visualize_cmd.extend(["--obstacles", args.obstacles])
+        
+        if args.results:
+            visualize_cmd.extend(["--results", args.results])
         
         result = subprocess.run(visualize_cmd)
         if result.returncode != 0:

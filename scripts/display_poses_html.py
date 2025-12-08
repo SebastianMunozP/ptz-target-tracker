@@ -66,6 +66,11 @@ def main():
         default=0.0,
         help='End effector size in Z dimension (extending below mounting point) in mm (default: 0)'
     )
+    parser.add_argument(
+        '--results',
+        type=str,
+        help='JSON file containing pose execution results (visited/failed poses)'
+    )
     
     args = parser.parse_args()
     
@@ -97,6 +102,16 @@ def main():
     
     print(f"Loaded {len(poses_data)} poses from {args.poses_file}")
     
+    # Load results if provided
+    visited_indices = set()
+    failed_indices = set()
+    if args.results and Path(args.results).exists():
+        with open(args.results, 'r') as f:
+            results_data = json.load(f)
+        visited_indices = {item['index'] for item in results_data.get('visited', [])}
+        failed_indices = {item['index'] for item in results_data.get('failed', [])}
+        print(f"Loaded results: {len(visited_indices)} visited, {len(failed_indices)} failed")
+    
     # Create scene
     scene = trimesh.Scene()
     
@@ -120,15 +135,25 @@ def main():
         position = [pose['x'], pose['y'], pose['z']]
         positions.append(position)
         
+        # Determine color based on results
+        if i in visited_indices:
+            color = [0, 255, 0, 255]  # Green for visited
+        elif i in failed_indices:
+            color = [255, 0, 0, 255]  # Red for failed
+        else:
+            color = [255, 0, 0, 255]  # Default red (no results available)
+        
         # Add small sphere at position
         sphere = trimesh.creation.icosphere(radius=20)
         sphere.apply_translation(position)
-        sphere.visual.vertex_colors = [255, 0, 0, 255]
+        sphere.visual.vertex_colors = color
         scene.add_geometry(sphere, node_name=f'pose_{i}')
         geometry_metadata.append({
             'index': geometry_index,
             'type': 'pose',
-            'name': f'pose_{i}'
+            'name': f'pose_{i}',
+            'visited': i in visited_indices,
+            'failed': i in failed_indices
         })
         geometry_index += 1
         
@@ -329,6 +354,19 @@ def main():
             <input type="checkbox" id="toggle-obstacles" checked>
             Obstacles
         </label>
+        <h3>Pose Filter</h3>
+        <label>
+            <input type="checkbox" id="filter-visited" checked>
+            Visited (Green)
+        </label>
+        <label>
+            <input type="checkbox" id="filter-failed" checked>
+            Failed (Red)
+        </label>
+        <label>
+            <input type="checkbox" id="filter-untested" checked>
+            Untested (Red)
+        </label>
     </div>
     <div id="tooltip"></div>
     <script type="importmap">
@@ -406,16 +444,24 @@ def main():
                         console.log('Mesh found - index:', meshIndex, 'type:', meshType, 'name:', meshName);
                         
                         if (meshType === 'pose') {{
+                            // Color will be set based on visited/failed status from trimesh
+                            // Green (0x00ff00) for visited, Red (0xff0000) for failed/untested
+                            const isVisited = metadata.visited || false;
+                            const isFailed = metadata.failed || false;
+                            const baseColor = isVisited ? 0x00ff00 : 0xff0000;
+                            
                             child.material = new THREE.MeshStandardMaterial({{
-                                color: 0xff0000,
-                                emissive: 0xff0000,
+                                color: baseColor,
+                                emissive: baseColor,
                                 emissiveIntensity: 1.5,
                                 metalness: 0,
                                 roughness: 0.2
                             }});
                             child.userData.isPose = true;
+                            child.userData.visited = isVisited;
+                            child.userData.failed = isFailed;
                             poseSpheres.push(child);
-                            console.log('Added pose sphere to array');
+                            console.log('Added pose sphere to array - visited:', isVisited, 'failed:', isFailed);
                         }} else if (meshType === 'end_effector') {{
                             child.material = new THREE.MeshStandardMaterial({{
                                 color: 0xFFFF00,
@@ -560,6 +606,40 @@ def main():
             document.getElementById('toggle-obstacles').addEventListener('change', function(e) {{
                 obstacleBoxes.forEach(obj => obj.visible = e.target.checked);
             }});
+            
+            // Pose filter controls
+            const updatePoseVisibility = () => {{
+                const showVisited = document.getElementById('filter-visited').checked;
+                const showFailed = document.getElementById('filter-failed').checked;
+                const showUntested = document.getElementById('filter-untested').checked;
+                const showPoses = document.getElementById('toggle-poses').checked;
+                const showEndEffectors = document.getElementById('toggle-end-effectors').checked;
+                
+                poseSpheres.forEach((sphere) => {{
+                    let shouldShow = showPoses;
+                    if (sphere.userData.visited) {{
+                        shouldShow = shouldShow && showVisited;
+                    }} else if (sphere.userData.failed) {{
+                        shouldShow = shouldShow && showFailed;
+                    }} else {{
+                        shouldShow = shouldShow && showUntested;
+                    }}
+                    sphere.visible = shouldShow;
+                }});
+                
+                // Update end effectors based on their associated pose visibility
+                endEffectors.forEach((ee) => {{
+                    const poseIdx = ee.userData.poseIndex;
+                    if (poseIdx !== undefined && poseIdx < poseSpheres.length) {{
+                        const sphere = poseSpheres[poseIdx];
+                        ee.visible = sphere.visible && showEndEffectors;
+                    }}
+                }});
+            }};
+            
+            document.getElementById('filter-visited').addEventListener('change', updatePoseVisibility);
+            document.getElementById('filter-failed').addEventListener('change', updatePoseVisibility);
+            document.getElementById('filter-untested').addEventListener('change', updatePoseVisibility);
         }}
         
         function onMouseMove(event) {{

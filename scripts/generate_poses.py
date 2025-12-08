@@ -164,9 +164,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
-  %(prog)s --num-poses 24 --safety-height 100
-  %(prog)s -n 12 -s 50
-  %(prog)s --num-poses 18 --safety-height 0 --reach 1700
+  %(prog)s --num-poses 24 --ee-clearance 50
+  %(prog)s -n 12 --ee-clearance 30
+  %(prog)s --num-poses 18 --ee-clearance 100 --reach 1700
         '''
     )
     
@@ -175,13 +175,6 @@ Examples:
         type=int,
         default=24,
         help='Number of poses to generate (12-24). Min 12: lower layer only. Max 24: full coverage (default: 24)'
-    )
-    
-    parser.add_argument(
-        '-s', '--safety-height',
-        type=float,
-        default=50.0,
-        help='Minimum clearance above mesh top in mm (default: 50.0)'
     )
     
     parser.add_argument(
@@ -271,11 +264,6 @@ Examples:
         print(f"Warning: Maximum is 24 poses. Setting to 24.")
         num_poses_requested = 24
     
-    safety_height_mm = args.safety_height
-    if safety_height_mm < 0:
-        print(f"Warning: Safety height must be >= 0. Setting to 0.")
-        safety_height_mm = 0.0
-    
     MAX_REACH = args.reach
     if MAX_REACH <= 0:
         print(f"Warning: Reach must be > 0. Using default 1700mm.")
@@ -294,7 +282,6 @@ Examples:
     
     print(f"\nConfiguration:")
     print(f"  Target number of poses: {num_poses_requested}")
-    print(f"  Safety height above mesh: {safety_height_mm:.1f} mm")
     print(f"  Maximum arm reach: {MAX_REACH:.1f} mm")
     print(f"  Arm base position: [{arm_base[0]:.1f}, {arm_base[1]:.1f}, {arm_base[2]:.1f}] mm")
     print(f"  End effector dimensions: {args.ee_x:.1f} x {args.ee_y:.1f} x {args.ee_z:.1f} mm (X x Y x Z)")
@@ -330,14 +317,14 @@ Examples:
     print(f"  Max: [{max_mm[0]:.1f}, {max_mm[1]:.1f}, {max_mm[2]:.1f}]")
     
     # Generate poses ABOVE the mesh with better spatial coverage
-    # Two layers: safety_height above mesh top, and 600mm above mesh top
+    # Two layers: ee_clearance above mesh top, and 600mm above mesh top
     z_layers = [
-        max_mm[2] + safety_height_mm,        # Lower layer: safety_height above mesh top (most important)
+        max_mm[2] + args.ee_clearance,       # Lower layer: ee_clearance above mesh top (most important)
         max_mm[2] + 600                      # Upper layer: 600mm above mesh top
     ]
     
     print(f"\nGenerating poses ABOVE the mesh:")
-    print(f"  Safety clearance: {safety_height_mm:.1f} mm above mesh top")
+    print(f"  Clearance: {args.ee_clearance:.1f} mm above mesh top")
     for i, z in enumerate(z_layers, 1):
         print(f"  Layer {i} Z: {z:.1f} mm ({z - max_mm[2]:.1f} mm above mesh top)")
     print(f"  Mesh top is at {max_mm[2]:.1f} mm")
@@ -451,10 +438,10 @@ Examples:
                 continue
             
             # Default orientation: pointing down (-Z direction)
-            o_x = 1.0  # Rotate around X axis
+            o_x = 0.0  # Rotate around X axis
             o_y = 0.0
-            o_z = 0.0
-            theta = 180.0  # 180 degrees to point down
+            o_z = -1.0
+            theta = 90.0  # 180 degrees to point down
             
             pose_data = {
                 "data": {
@@ -520,10 +507,10 @@ Examples:
                     continue
                 
                 # Default orientation: pointing down (-Z direction)
-                o_x = 1.0
+                o_x = 0.0
                 o_y = 0.0
-                o_z = 0.0
-                theta = 180.0
+                o_z = -1.0
+                theta = 90.0
                 
                 pose_data = {
                     "data": {
