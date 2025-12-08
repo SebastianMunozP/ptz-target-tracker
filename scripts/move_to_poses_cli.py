@@ -62,6 +62,43 @@ async def get_arm_speed(arm: Arm):
     return None
 
 
+def move_to_pose(pose_entry, part_id: str, component: str):
+    """
+    Move to a specific pose using Viam CLI.
+    
+    Args:
+        pose_entry: Pose data dictionary
+        part_id: Viam part ID
+        component: Component name
+        
+    Returns:
+        tuple: (success: bool, stdout: str, stderr: str)
+    """
+    try:
+        pose = pose_entry['data']['pose']
+        x, y, z = pose['x'], pose['y'], pose['z']
+        ox, oy, oz = pose['o_x'], pose['o_y'], pose['o_z']
+        theta = pose['theta']
+    except KeyError as e:
+        return False, "", f"Missing field in pose: {e}"
+    
+    # Build CLI command
+    cmd = [
+        'sudo', 'viam', 'machines', 'part', 'motion', 'set-pose',
+        '--part', part_id,
+        '--component', component,
+        '-x', str(x), '-y', str(y), '-z', str(z),
+        '--ox', str(ox), '--oy', str(oy), '--oz', str(oz),
+        '--theta', str(theta)
+    ]
+    
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return True, result.stdout, ""
+    except subprocess.CalledProcessError as e:
+        return False, "", str(e.stderr)
+
+
 async def main_async():
     parser = argparse.ArgumentParser(
         description='Move arm through calibration poses with speed control',
@@ -159,8 +196,11 @@ async def main_async():
     visited_poses = []  # List of (index, pose_entry) tuples
     failed_poses = []   # List of (index, pose_entry, error) tuples
     
-    # Move through poses using CLI
-    for i, pose_entry in enumerate(poses):
+    # Move through poses using CLI with ability to go back
+    i = 0
+    while i < total_poses:
+        pose_entry = poses[i]
+        
         try:
             pose = pose_entry['data']['pose']
             x, y, z = pose['x'], pose['y'], pose['z']
@@ -168,6 +208,7 @@ async def main_async():
             theta = pose['theta']
         except KeyError as e:
             print(f"Error: Missing field in pose {i + 1}: {e}")
+            i += 1
             continue
         
         print("=" * 50)
@@ -177,39 +218,38 @@ async def main_async():
         print(f"Orientation: ({ox:.4f}, {oy:.4f}, {oz:.4f}) @ {theta:.2f}°")
         print()
         
-        # Build CLI command
-        cmd = [
-            'viam', 'machines', 'part', 'motion', 'set-pose',
-            '--part', part_id,
-            '--component', component,
-            '-x', str(x), '-y', str(y), '-z', str(z),
-            '--ox', str(ox), '--oy', str(oy), '--oz', str(oz),
-            '--theta', str(theta)
-        ]
-        
-        cmd.insert(0, 'sudo')
-        
         print("Moving to pose...")
-        try:
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            print("✓ Move completed")
-            visited_poses.append((i, pose_entry))
-            if result.stdout.strip():
-                print(result.stdout)
-        except subprocess.CalledProcessError as e:
-            print(f"✗ Move failed: {e.stderr}")
-            failed_poses.append((i, pose_entry, str(e.stderr)))
-            input("Press Enter to continue or Ctrl+C to abort...")
-            continue
+        success, stdout, stderr = move_to_pose(pose_entry, part_id, component)
         
-        if i < total_poses - 1:
+        if success:
+            print("✓ Move completed")
+            # Update visited list - remove if already there, add at current position
+            visited_poses = [(idx, p) for idx, p in visited_poses if idx != i]
+            visited_poses.append((i, pose_entry))
+            if stdout.strip():
+                print(stdout)
+        else:
+            print(f"✗ Move failed: {stderr}")
+            # Update failed list - remove if already there, add at current position
+            failed_poses = [(idx, p, e) for idx, p, e in failed_poses if idx != i]
+            failed_poses.append((i, pose_entry, stderr))
+        
+        if i < total_poses - 1 or i > 0:
             print()
             try:
-                input("Press Enter for next pose (Ctrl+C to stop)...")
+                user_input = input("Press Enter for next pose, 'p' for previous pose, or Ctrl+C to stop: ").strip().lower()
+                if user_input == 'p' and i > 0:
+                    i -= 1
+                    print(f"\n↩ Going back to pose {i + 1}")
+                    print()
+                else:
+                    i += 1
+                    print()
             except KeyboardInterrupt:
                 print("\n\nStopped by user.")
                 break
-            print()
+        else:
+            i += 1
     
     # Restore original speed
     if original_speed:
