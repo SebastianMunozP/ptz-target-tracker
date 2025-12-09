@@ -8,6 +8,8 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+from datetime import datetime
+import shutil
 
 
 def main():
@@ -66,7 +68,18 @@ def main():
     parser.add_argument(
         "--obstacles",
         type=str,
-        help="JSON file containing obstacle bounding boxes (optional)"
+        help="JSON file containing obstacle bounding boxes (optional). If not provided, will be auto-generated from mesh"
+    )
+    parser.add_argument(
+        "--obstacle-zones",
+        type=int,
+        default=3,
+        help="Number of height zones to split obstacles into (default: 3)"
+    )
+    parser.add_argument(
+        "--skip-obstacles",
+        action="store_true",
+        help="Skip obstacle generation entirely"
     )
     parser.add_argument(
         "--ee-x",
@@ -107,14 +120,59 @@ def main():
         type=str,
         help="JSON file containing pose execution results (visited/failed poses) for visualization"
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Output directory for all artifacts. If not provided, creates timestamped directory (calibration_YYYYMMDD_HHMMSS)"
+    )
     
     args = parser.parse_args()
+    
+    # Create output directory with timestamp
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = Path(f"ptz_tracking_calibration_{timestamp}")
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"📁 Output directory: {output_dir.absolute()}\n")
     
     # Get the script directory
     script_dir = Path(__file__).parent
     
+    # Define output files in the output directory
+    obstacles_file_path = output_dir / "obstacles.json"
+    poses_file_path = output_dir / args.output
+    visualization_html_path = output_dir / "visualization.html"
+    visualization_glb_path = output_dir / "visualization.glb"
+    
+    # Step 0: Generate obstacles from mesh (if needed)
+    obstacles_file = args.obstacles
+    if not args.skip_obstacles and not obstacles_file:
+        print("=" * 60)
+        print("STEP 0: Generating obstacles from mesh")
+        print("=" * 60)
+        
+        # Generate obstacles.json in output directory
+        obstacle_cmd = [
+            sys.executable,
+            str(script_dir / "calculate_hardtop_bbox.py"),
+            args.mesh,
+            "--zones", str(args.obstacle_zones),
+            "-o", str(obstacles_file_path)
+        ]
+        
+        result = subprocess.run(obstacle_cmd)
+        if result.returncode != 0:
+            print("\n⚠️  Failed to generate obstacles, continuing without obstacles...", file=sys.stderr)
+            obstacles_file = None
+        else:
+            print(f"✅ Generated obstacles: {obstacles_file_path}")
+            obstacles_file = str(obstacles_file_path)
+    
     # Step 1: Generate poses
-    print("=" * 60)
+    print("\n" + "=" * 60)
     print("STEP 1: Generating poses")
     print("=" * 60)
     
@@ -127,15 +185,15 @@ def main():
         "--arm-base-y", str(args.arm_base_y),
         "--arm-base-z", str(args.arm_base_z),
         "--mesh", args.mesh,
-        "--output", args.output,
+        "--output", str(poses_file_path),
         "--ee-x", str(args.ee_x),
         "--ee-y", str(args.ee_y),
         "--ee-z", str(args.ee_z),
         "--ee-clearance", str(args.ee_clearance)
     ]
     
-    if args.obstacles:
-        generate_cmd.extend(["--obstacles", args.obstacles])
+    if obstacles_file:
+        generate_cmd.extend(["--obstacles", obstacles_file])
     
     result = subprocess.run(generate_cmd)
     if result.returncode != 0:
@@ -151,7 +209,7 @@ def main():
         visualize_cmd = [
             sys.executable,
             str(script_dir / "display_poses_html.py"),
-            args.output,
+            str(poses_file_path),
             "--reach", str(args.reach),
             "--arm-base-x", str(args.arm_base_x),
             "--arm-base-y", str(args.arm_base_y),
@@ -162,8 +220,8 @@ def main():
             "--ee-z", str(args.ee_z)
         ]
         
-        if args.obstacles:
-            visualize_cmd.extend(["--obstacles", args.obstacles])
+        if obstacles_file:
+            visualize_cmd.extend(["--obstacles", obstacles_file])
         
         if args.results:
             visualize_cmd.extend(["--results", args.results])
@@ -173,26 +231,41 @@ def main():
             print("\n⚠️  Failed to generate visualization", file=sys.stderr)
             return 1
         
+        # Move generated visualization files to output directory
+        if Path("visualization.html").exists():
+            shutil.move("visualization.html", visualization_html_path)
+        if Path("visualization.glb").exists():
+            shutil.move("visualization.glb", visualization_glb_path)
+        
         # Step 3: Open in browser (if requested)
         if args.open_browser:
             print("\n" + "=" * 60)
             print("STEP 3: Opening visualization in browser")
             print("=" * 60)
             
-            html_file = Path.cwd() / "visualization.html"
-            if html_file.exists():
+            if visualization_html_path.exists():
                 import webbrowser
-                webbrowser.open(f"file://{html_file.absolute()}")
-                print(f"✓ Opened {html_file}")
+                webbrowser.open(f"file://{visualization_html_path.absolute()}")
+                print(f"✓ Opened {visualization_html_path}")
             else:
-                print(f"⚠️  Could not find {html_file}", file=sys.stderr)
+                print(f"⚠️  Could not find {visualization_html_path}", file=sys.stderr)
+    
+    # Copy mesh file to output directory for reference
+    mesh_path = Path(args.mesh)
+    if mesh_path.exists():
+        shutil.copy(mesh_path, output_dir / mesh_path.name)
     
     print("\n" + "=" * 60)
     print("✓ Done!")
     print("=" * 60)
-    print(f"Poses saved to: {args.output}")
+    print(f"📁 All artifacts saved to: {output_dir.absolute()}")
+    print(f"  - Poses: {poses_file_path.name}")
+    if obstacles_file and Path(obstacles_file).exists():
+        print(f"  - Obstacles: {obstacles_file_path.name}")
     if not args.skip_visualization:
-        print(f"Visualization: visualization.html")
+        print(f"  - Visualization: {visualization_html_path.name}")
+        print(f"  - 3D Model: {visualization_glb_path.name}")
+    print(f"  - Mesh (copy): {mesh_path.name}")
     
     return 0
 
