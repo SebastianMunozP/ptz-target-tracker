@@ -152,6 +152,7 @@ def main():
             'index': geometry_index,
             'type': 'pose',
             'name': f'pose_{i}',
+            'pose_number': i,
             'visited': i in visited_indices,
             'failed': i in failed_indices
         })
@@ -516,6 +517,7 @@ def main():
                                 roughness: 0.2
                             }});
                             child.userData.isPose = true;
+                            child.userData.poseNumber = metadata.pose_number;
                             child.userData.visited = isVisited;
                             child.userData.failed = isFailed;
                             poseSpheres.push(child);
@@ -772,6 +774,9 @@ def main():
                     
                     // Check for pose spheres
                     if (obj.userData.isPose || obj.userData.isOrigin) {{
+                        // Skip invisible objects
+                        if (!obj.visible) continue;
+                        
                         highlightObject(obj);
                         
                         const box = new THREE.Box3().setFromObject(obj);
@@ -797,6 +802,7 @@ def main():
                             &nbsp;&nbsp;Z: ${{sphereCenter.z.toFixed(1)}} mm`;
                         
                         if (obj.userData.isPose) {{
+                            tooltipContent += `<br><strong>Pose #:</strong> ${{obj.userData.poseNumber + 1}}`;
                             tooltipContent += `<br><strong>Distance:</strong> ${{distanceFromOrigin.toFixed(1)}} mm`;
                             
                             if (obj.userData.visited) {{

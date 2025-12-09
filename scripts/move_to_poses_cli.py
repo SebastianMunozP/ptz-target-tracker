@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 
 from viam.robot.client import RobotClient
 from viam.components.arm import Arm
+from viam.services.generic import Generic as GenericService
 
         
         
@@ -60,6 +61,33 @@ async def get_arm_speed(arm: Arm):
     except Exception:
         pass
     return None
+
+
+async def push_sample(component):
+    """Record current calibration sample via DoCommand."""
+    try:
+        result = await component.do_command({"command": "push-sample"})
+        return True, result
+    except Exception as e:
+        return False, str(e)
+
+
+async def pop_sample(component):
+    """Delete the last calibration sample via DoCommand."""
+    try:
+        result = await component.do_command({"command": "pop-sample"})
+        return True, result
+    except Exception as e:
+        return False, str(e)
+
+
+async def get_calibration_samples(component):
+    """Get all calibration samples via DoCommand."""
+    try:
+        result = await component.do_command({"command": "get-calibration-samples"})
+        return True, result
+    except Exception as e:
+        return False, str(e)
 
 
 def move_to_pose(pose_entry, part_id: str, component: str):
@@ -118,6 +146,12 @@ async def main_async():
         help='Path to .env file with robot configuration'
     )
     
+    parser.add_argument(
+        '--record-samples',
+        action='store_true',
+        help='Record calibration sample at each pose using push_sample do_command'
+    )
+    
     args = parser.parse_args()
     
     # Load .env file (required)
@@ -135,6 +169,7 @@ async def main_async():
     api_key_id = os.getenv('VIAM_API_KEY_ID')
     robot_address = os.getenv('VIAM_ROBOT_ADDRESS')
     component = os.getenv('VIAM_COMPONENT_NAME', 'ptz_fake_arm_2')
+    tracker_component = os.getenv('VIAM_TRACKER_COMPONENT_NAME', 'ptz-component-tracker')
     part_id = os.getenv('VIAM_PART_ID')
     
     # Validate
@@ -237,7 +272,57 @@ async def main_async():
         if i < total_poses - 1 or i > 0:
             print()
             try:
-                user_input = input("Press Enter for next pose, 'p' for previous pose, or Ctrl+C to stop: ").strip().lower()
+                if args.record_samples and success:
+                    user_input = input("Press Enter for next pose, 'p' for previous, 's' to save sample, 'd' to delete last sample, or Ctrl+C to stop: ").strip().lower()
+                else:
+                    user_input = input("Press Enter for next pose, 'p' for previous pose, or Ctrl+C to stop: ").strip().lower()
+                
+                if user_input == 's' and args.record_samples and success:
+                    print("\nRecording calibration sample...")
+                    # Need to reconnect to use SDK
+                    robot_temp = await connect_robot(api_key, api_key_id, robot_address)
+                    try:
+                        # Get the tracker service as GenericService
+                        tracker = GenericService.from_robot(robot_temp, tracker_component)
+                        
+                        sample_success, sample_result = await push_sample(tracker)
+                        if sample_success:
+                            print("✓ Sample recorded")
+                            if sample_result:
+                                print(f"  Result: {sample_result}")
+                        else:
+                            print(f"✗ Failed to record sample: {sample_result}")
+                    except Exception as e:
+                        print(f"✗ Failed to access tracker component '{tracker_component}': {e}")
+                    
+                    await robot_temp.close()
+                    print()
+                    # Ask again after recording
+                    user_input = input("Press Enter for next pose, 'p' for previous pose, or Ctrl+C to stop: ").strip().lower()
+                
+                elif user_input == 'd' and args.record_samples:
+                    print("\nDeleting last calibration sample...")
+                    # Need to reconnect to use SDK
+                    robot_temp = await connect_robot(api_key, api_key_id, robot_address)
+                    try:
+                        # Get the tracker service as GenericService
+                        tracker = GenericService.from_robot(robot_temp, tracker_component)
+                        
+                        delete_success, delete_result = await pop_sample(tracker)
+                        if delete_success:
+                            print("✓ Last sample deleted")
+                            if delete_result:
+                                print(f"  Result: {delete_result}")
+                        else:
+                            print(f"✗ Failed to delete sample: {delete_result}")
+                    except Exception as e:
+                        print(f"✗ Failed to access tracker component '{tracker_component}': {e}")
+                    
+                    await robot_temp.close()
+                    print()
+                    # Ask again after deleting
+                    user_input = input("Press Enter for next pose, 'p' for previous pose, or Ctrl+C to stop: ").strip().lower()
+                
                 if user_input == 'p' and i > 0:
                     i -= 1
                     print(f"\n↩ Going back to pose {i + 1}")
@@ -251,15 +336,40 @@ async def main_async():
         else:
             i += 1
     
-    # Restore original speed
+    # Restore original speed and get calibration samples
+    print()
+    print("Restoring original arm speed...")
+    robot = await connect_robot(api_key, api_key_id, robot_address)
+    arm = Arm.from_robot(robot, component)
+    
     if original_speed:
-        print()
-        print("Restoring original arm speed...")
-        robot = await connect_robot(api_key, api_key_id, robot_address)
-        arm = Arm.from_robot(robot, component)
         await set_arm_speed(arm, original_speed)
         print(f"✓ Speed restored to {original_speed}%")
-        await robot.close()
+    
+    # Get calibration samples if recording was enabled
+    if args.record_samples:
+        print("\nRetrieving calibration samples...")
+        try:
+            # Get the tracker service as GenericService
+            tracker = GenericService.from_robot(robot, tracker_component)
+            
+            samples_success, samples_result = await get_calibration_samples(tracker)
+            if samples_success:
+                print("✓ Calibration samples retrieved")
+                print(f"\nCalibration data:")
+                print(json.dumps(samples_result, indent=2))
+                
+                # Save samples to file
+                samples_file = args.poses_file.replace('.json', '_calibration_samples.json')
+                with open(samples_file, 'w') as f:
+                    json.dump(samples_result, f, indent=2)
+                print(f"\n✓ Calibration samples saved to: {samples_file}")
+            else:
+                print(f"✗ Failed to retrieve calibration samples: {samples_result}")
+        except Exception as e:
+            print(f"✗ Failed to access tracker component '{tracker_component}': {e}")
+    
+    await robot.close()
     
     print()
     print("=" * 50)
