@@ -134,10 +134,8 @@ async def main_async():
     )
     
     parser.add_argument(
-        '--poses-file',
-        nargs='?',
-        default='ee_poses_generated.json',
-        help='JSON file containing poses (default: ee_poses_generated.json)'
+        'calibration_dir',
+        help='Directory containing calibration files (poses, obstacles, visualization, etc.)'
     )
     
     parser.add_argument(
@@ -153,6 +151,25 @@ async def main_async():
     )
     
     args = parser.parse_args()
+    
+    # Validate calibration directory
+    calib_dir = Path(args.calibration_dir)
+    if not calib_dir.exists():
+        print(f"Error: Calibration directory not found: {args.calibration_dir}")
+        sys.exit(1)
+    
+    if not calib_dir.is_dir():
+        print(f"Error: Path is not a directory: {args.calibration_dir}")
+        sys.exit(1)
+    
+    # Find poses file in directory
+    poses_file = calib_dir / "ee_poses_generated.json"
+    if not poses_file.exists():
+        print(f"Error: Poses file not found: {poses_file}")
+        sys.exit(1)
+    
+    print(f"Using calibration directory: {calib_dir}")
+    print(f"Poses file: {poses_file}")
     
     # Load .env file (required)
     env_path = Path(args.env_file)
@@ -179,17 +196,12 @@ async def main_async():
         print("Either in .env file or via command line arguments")
         sys.exit(1)
     
-    # Load poses
-    poses_path = Path(args.poses_file)
-    if not poses_path.exists():
-        print(f"Error: Poses file '{args.poses_file}' not found!")
-        sys.exit(1)
-    
-    with open(poses_path, 'r') as f:
+    # Load poses from calibration directory
+    with open(poses_file, 'r') as f:
         poses = json.load(f)
     
     total_poses = len(poses)
-    print(f"Found {total_poses} poses in {args.poses_file}")
+    print(f"Found {total_poses} poses in {poses_file}")
     print(f"Component: {component}")
     print(f"Target speed: {DEFAULT_VELOCITY_NORMAL}%")
     print()
@@ -360,7 +372,7 @@ async def main_async():
                 print(json.dumps(samples_result, indent=2))
                 
                 # Save samples to file
-                samples_file = args.poses_file.replace('.json', '_calibration_samples.json')
+                samples_file = calib_dir / "ee_poses_generated_calibration_samples.json"
                 with open(samples_file, 'w') as f:
                     json.dump(samples_result, f, indent=2)
                 print(f"\n✓ Calibration samples saved to: {samples_file}")
@@ -406,7 +418,7 @@ async def main_async():
         print()
     
     # Save results to JSON for visualization
-    results_file = args.poses_file.replace('.json', '_results.json')
+    results_file = calib_dir / "ee_poses_generated_results.json"
     results_data = {
         'total': total_poses,
         'visited': [{'index': idx, 'pose': pose_entry} for idx, pose_entry in visited_poses],
@@ -418,17 +430,16 @@ async def main_async():
     
     # Regenerate visualization with results
     print("\nRegenerating visualization with execution results...")
-    poses_dir = Path(args.poses_file).parent
-    visualization_html = poses_dir / "visualization.html"
+    visualization_html = calib_dir / "visualization.html"
     
     if visualization_html.exists():
         # Find the corresponding files
-        obstacles_file = poses_dir / "obstacles.json"
+        obstacles_file = calib_dir / "obstacles.json"
         mesh_file = None
         
         # Look for mesh file (try common names)
-        for mesh_name in ['dry_run_mesh.ply', 'mesh.ply', poses_dir.name + '.ply']:
-            candidate = poses_dir / mesh_name
+        for mesh_name in ['dry_run_mesh.ply', 'mesh.ply', calib_dir.name + '.ply']:
+            candidate = calib_dir / mesh_name
             if candidate.exists():
                 mesh_file = candidate
                 break
@@ -438,7 +449,7 @@ async def main_async():
             regen_cmd = [
                 'python3', 
                 str(Path(__file__).parent / 'display_poses_html.py'),
-                str(args.poses_file),
+                str(poses_file),
                 '--mesh', str(mesh_file),
                 '--results', str(results_file)
             ]
@@ -447,7 +458,7 @@ async def main_async():
                 regen_cmd.extend(['--obstacles', str(obstacles_file)])
             
             # Load visualization metadata if available to get original parameters
-            viz_metadata_file = poses_dir / "visualization_metadata.json"
+            viz_metadata_file = calib_dir / "visualization_metadata.json"
             if viz_metadata_file.exists():
                 try:
                     with open(viz_metadata_file, 'r') as f:
