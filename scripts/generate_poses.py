@@ -328,7 +328,6 @@ Examples:
     
     z_layers = [
         lower_z,                             # Lower layer: ee_clearance above mesh top (most important)
-        max_mm[2] + 600,                     # Middle layer: 600mm above mesh top (unused)
         high_z                               # High layer: halfway between lower and max possible height
     ]
     
@@ -354,10 +353,6 @@ Examples:
         nx_high, ny_high = 0, 0
         num_high_extra = 0
     
-    # No middle layer
-    num_middle = 0
-    nx_middle, ny_middle = 0, 0
-    
     print(f"\nPose distribution:")
     print(f"  Lower layer (most important): {num_lower} poses ({nx_lower}x{ny_lower} grid)")
     print(f"  Middle layer: 0 poses")
@@ -371,13 +366,11 @@ Examples:
     # Calculate reasonable generation area based on reach and Z heights
     # The maximum XY distance we can have at each Z layer while staying within reach
     max_xy_radius_lower = np.sqrt(MAX_REACH**2 - (z_layers[0] - arm_base[2])**2) if MAX_REACH**2 > (z_layers[0] - arm_base[2])**2 else 0
-    max_xy_radius_middle = np.sqrt(MAX_REACH**2 - (z_layers[1] - arm_base[2])**2) if MAX_REACH**2 > (z_layers[1] - arm_base[2])**2 else 0
-    max_xy_radius_high = np.sqrt(MAX_REACH**2 - (z_layers[2] - arm_base[2])**2) if MAX_REACH**2 > (z_layers[2] - arm_base[2])**2 else 0
+    max_xy_radius_high = np.sqrt(MAX_REACH**2 - (z_layers[1] - arm_base[2])**2) if MAX_REACH**2 > (z_layers[1] - arm_base[2])**2 else 0
     
     # Use 80% of max radius to ensure poses are comfortably within reach
     safe_margin = 0.8
     generation_radius_lower = max_xy_radius_lower * safe_margin
-    generation_radius_middle = max_xy_radius_middle * safe_margin
     generation_radius_high = max_xy_radius_high * safe_margin
     
     # Also constrain by mesh bounds
@@ -388,7 +381,6 @@ Examples:
     
     print(f"\nGeneration area (constrained by reach and mesh):")
     print(f"  Max XY radius at lower layer: {max_xy_radius_lower:.1f} mm (using {safe_margin*100:.0f}% = {generation_radius_lower:.1f} mm)")
-    print(f"  Max XY radius at middle layer: {max_xy_radius_middle:.1f} mm (using {safe_margin*100:.0f}% = {generation_radius_middle:.1f} mm)")
     print(f"  Max XY radius at high layer: {max_xy_radius_high:.1f} mm (using {safe_margin*100:.0f}% = {generation_radius_high:.1f} mm)")
     print(f"  X: [{x_min_gen:.1f}, {x_max_gen:.1f}] mm")
     print(f"  Y: [{y_min_gen:.1f}, {y_max_gen:.1f}] mm")
@@ -489,72 +481,84 @@ Examples:
             else:
                 print(f"  ✓ Pose {pose_count}: [{x:.1f}, {y:.1f}, {z:.1f}] mm ({height_above:.0f}mm above mesh, distance: {distance:.1f} mm)")
     
-    # Generate middle layer (if requested)
-    if num_middle > 0:
-        x_positions_middle = np.linspace(x_min_gen + x_margin, x_max_gen - x_margin, nx_middle)
-        y_positions_middle = np.linspace(y_min_gen + y_margin, y_max_gen - y_margin, ny_middle)
-        
-        print(f"\nGenerating middle layer poses:")
-        for y in y_positions_middle:
-            for x in x_positions_middle:
-                z = z_layers[1]
-                # Calculate distance from arm base
-                pose_pos = np.array([x, y, z])
-                distance = np.linalg.norm(pose_pos - arm_base)
-                
-                # Skip poses that are beyond the arm's reach
-                if distance > MAX_REACH:
-                    rejected_count += 1
-                    print(f"  ✗ Skipped (reach): [{x:.1f}, {y:.1f}, {z:.1f}] mm - Distance {distance:.1f} mm > {MAX_REACH} mm")
-                    continue
-                
-                # Check collision with obstacles
-                collides, obstacle_label = check_collision_with_obstacles(
-                    pose_pos, args.ee_z, args.ee_x, args.ee_y, args.ee_clearance, obstacles
-                )
-                if collides:
-                    rejected_by_obstacle += 1
-                    print(f"  ✗ Skipped (obstacle): [{x:.1f}, {y:.1f}, {z:.1f}] mm - Collision with {obstacle_label}")
-                    continue
-                
-                # Default orientation: pointing down (-Z direction)
-                o_x = 0.0
-                o_y = 0.0
-                o_z = -1.0
-                theta = 90.0
-                
-                pose_data = {
-                    "data": {
-                        "pose": {
-                            "x": float(x),
-                            "y": float(y),
-                            "z": float(z),
-                            "o_x": o_x,
-                            "o_y": o_y,
-                            "o_z": o_z,
-                            "theta": theta
-                        }
-                    },
-                    "tags": None,
-                    "additional_parameters": {},
-                    "method_name": "EndPosition",
-                    "organization_id": "generated",
-                    "time_requested": datetime.now(timezone.utc).isoformat(),
-                    "time_received": datetime.now(timezone.utc).isoformat(),
-                    "location_id": "generated",
-                    "robot_id": "generated",
-                    "part_id": "generated",
-                    "component_type": "rdk:component:arm",
-                    "component_name": "generated",
-                    "capture_day": datetime.now(timezone.utc).date().isoformat()
-                }
-                
-                poses.append(pose_data)
-                pose_count += 1
-                
-                height_above = z - max_mm[2]
-                print(f"  ✓ Pose {pose_count}: [{x:.1f}, {y:.1f}, {z:.1f}] mm ({height_above:.0f}mm above mesh, distance: {distance:.1f} mm)")
+    # Add 2 edge poses at extreme X positions with lowest Y (front row)
+    print(f"\nGenerating edge layer poses (X extremes):")
     
+    # Use the lowest Y position (front row) - same as first row of grid
+    y_front = y_min_gen + y_margin
+    z_edge = z_layers[0]  # Lower layer Z (will be adjusted for obstacles)
+    
+    # Calculate maximum X at this Y and Z while staying within reach
+    # reach² = x² + y² + z²  =>  x = sqrt(reach² - y² - z²)
+    max_x_at_front = np.sqrt(MAX_REACH**2 - y_front**2 - z_edge**2)
+    
+    for x in [-max_x_at_front, max_x_at_front]:
+        z = z_layers[0]  # Start with default lower layer Z
+        
+        # Check if there's an obstacle beneath this XY position
+        obstacle_adjusted_z, obstacle_label = find_highest_obstacle_beneath(
+            x, y_front, args.ee_x, args.ee_y, args.ee_z, args.ee_clearance, obstacles
+        )
+        
+        if obstacle_adjusted_z is not None:
+            # Use adjusted Z so end effector bottom sits on top of obstacle (with clearance)
+            print(f"  ⚠ Adjusted Z for obstacle '{obstacle_label}': [{x:.1f}, {y_front:.1f}] from {z:.1f} to {obstacle_adjusted_z:.1f} mm")
+            z = obstacle_adjusted_z
+        
+        pose_pos = np.array([x, y_front, z])
+        distance = np.linalg.norm(pose_pos - arm_base)
+        
+        # Skip if beyond reach
+        if distance > MAX_REACH:
+            rejected_count += 1
+            print(f"  ✗ Skipped (reach): [{x:.1f}, {y_front:.1f}, {z:.1f}] mm - Distance {distance:.1f} mm > {MAX_REACH} mm")
+            continue
+        
+        # Final collision check (should pass now, but verify)
+        collides, collision_label = check_collision_with_obstacles(
+            pose_pos, args.ee_z, args.ee_x, args.ee_y, args.ee_clearance, obstacles
+        )
+        if collides:
+            rejected_by_obstacle += 1
+            print(f"  ✗ Skipped (obstacle): [{x:.1f}, {y_front:.1f}, {z:.1f}] mm - Collision with {collision_label}")
+            continue
+        
+        # Create pose data
+        pose_data = {
+            "data": {
+                "pose": {
+                    "x": float(x),
+                    "y": float(y_front),
+                    "z": float(z),
+                    "o_x": o_x,
+                    "o_y": o_y,
+                    "o_z": o_z,
+                    "theta": theta
+                }
+            },
+            "tags": None,
+            "additional_parameters": {},
+            "method_name": "EndPosition",
+            "organization_id": "generated",
+            "time_requested": datetime.now(timezone.utc).isoformat(),
+            "time_received": datetime.now(timezone.utc).isoformat(),
+            "location_id": "generated",
+            "robot_id": "generated",
+            "part_id": "generated",
+            "component_type": "rdk:component:arm",
+            "component_name": "generated",
+            "capture_day": datetime.now(timezone.utc).date().isoformat()
+        }
+        
+        poses.append(pose_data)
+        pose_count += 1
+        
+        height_above = z - max_mm[2]
+        if height_above < 0:
+            print(f"  ⚠️  Pose {pose_count}: [{x:.1f}, {y_front:.1f}, {z:.1f}] mm - BELOW MESH! Distance: {distance:.1f} mm")
+        else:
+            print(f"  ✓ Pose {pose_count}: [{x:.1f}, {y_front:.1f}, {z:.1f}] mm ({height_above:.0f}mm above mesh, distance: {distance:.1f} mm)")
+
     # Generate high layer (if requested)
     if num_high > 0:
         # Use reduced range for high layer to stay within reach
@@ -567,7 +571,7 @@ Examples:
         print(f"\nGenerating high layer poses:")
         for y in y_positions_high:
             for x in x_positions_high:
-                z = z_layers[2]
+                z = z_layers[1]  # High layer Z
                 # Calculate distance from arm base
                 pose_pos = np.array([x, y, z])
                 distance = np.linalg.norm(pose_pos - arm_base)
@@ -627,7 +631,7 @@ Examples:
     
     # Add extra high pose at maximum Y reach (if requested)
     if num_high_extra > 0:
-        z = z_layers[2]
+        z = z_layers[1]
         # Calculate maximum Y at this Z while staying within MAX_REACH
         # Using: distance^2 = x^2 + y^2 + z^2, with x=0
         max_y_at_high_z = np.sqrt(MAX_REACH**2 - z**2)

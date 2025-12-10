@@ -24,12 +24,6 @@ def main():
     
     # Pose generation parameters
     parser.add_argument(
-        "-n", "--num-poses",
-        type=int,
-        default=24,
-        help="Number of poses to generate (12-24 recommended)"
-    )
-    parser.add_argument(
         "-r", "--reach",
         type=float,
         default=1700.0,
@@ -238,7 +232,6 @@ def main():
     generate_cmd = [
         sys.executable,
         str(script_dir / "generate_poses.py"),
-        "--num-poses", str(args.num_poses),
         "--reach", str(args.reach),
         "--arm-base-x", str(args.arm_base_x),
         "--arm-base-y", str(args.arm_base_y),
