@@ -141,6 +141,34 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"📁 Output directory: {output_dir.absolute()}\n")
     
+    # Set up logging to file and terminal
+    log_file = output_dir / "calibration_log.txt"
+    
+    class TeeLogger:
+        """Write to both file and terminal"""
+        def __init__(self, filename):
+            self.terminal = sys.stdout
+            self.log = open(filename, 'w', encoding='utf-8')
+        
+        def write(self, message):
+            self.terminal.write(message)
+            self.log.write(message)
+            self.log.flush()
+        
+        def flush(self):
+            self.terminal.flush()
+            self.log.flush()
+        
+        def close(self):
+            self.log.close()
+    
+    # Redirect stdout to both terminal and log file
+    tee = TeeLogger(log_file)
+    old_stdout = sys.stdout
+    sys.stdout = tee
+    
+    print(f"📝 Logging to: {log_file.absolute()}\n")
+    
     # Handle dry run mode - generate mesh from bounding box
     if args.dry_run:
         try:
@@ -217,7 +245,12 @@ def main():
         ]
         
         print(f"\n🔧 Running: {' '.join(obstacle_cmd)}\n")
-        result = subprocess.run(obstacle_cmd)
+        sys.stdout.flush()
+        result = subprocess.run(obstacle_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        # Write captured output to both terminal and log
+        if result.stdout:
+            print(result.stdout, end='')
+        sys.stdout.flush()
         if result.returncode != 0:
             print("\n⚠️  Failed to generate obstacles, continuing without obstacles...", file=sys.stderr)
             obstacles_file = None
@@ -249,7 +282,12 @@ def main():
         generate_cmd.extend(["--obstacles", obstacles_file])
     
     print(f"\n🔧 Running: {' '.join(generate_cmd)}\n")
-    result = subprocess.run(generate_cmd)
+    sys.stdout.flush()
+    result = subprocess.run(generate_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # Write captured output to both terminal and log
+    if result.stdout:
+        print(result.stdout, end='')
+    sys.stdout.flush()
     if result.returncode != 0:
         print("\n❌ Failed to generate poses", file=sys.stderr)
         return 1
@@ -296,7 +334,12 @@ def main():
             visualize_cmd.extend(["--results", args.results])
         
         print(f"\n🔧 Running: {' '.join(visualize_cmd)}\n")
-        result = subprocess.run(visualize_cmd)
+        sys.stdout.flush()
+        result = subprocess.run(visualize_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        # Write captured output to both terminal and log
+        if result.stdout:
+            print(result.stdout, end='')
+        sys.stdout.flush()
         if result.returncode != 0:
             print("\n⚠️  Failed to generate visualization", file=sys.stderr)
             return 1
@@ -336,6 +379,11 @@ def main():
         print(f"  - Visualization: {visualization_html_path.name}")
         print(f"  - 3D Model: {visualization_glb_path.name}")
     print(f"  - Mesh (copy): {mesh_path.name}")
+    print(f"  - Log: {log_file.name}")
+    
+    # Close log file and restore stdout
+    sys.stdout = old_stdout
+    tee.close()
     
     return 0
 
