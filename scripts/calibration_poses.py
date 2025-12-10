@@ -216,6 +216,7 @@ def main():
             "-o", str(obstacles_file_path)
         ]
         
+        print(f"\n🔧 Running: {' '.join(obstacle_cmd)}\n")
         result = subprocess.run(obstacle_cmd)
         if result.returncode != 0:
             print("\n⚠️  Failed to generate obstacles, continuing without obstacles...", file=sys.stderr)
@@ -247,6 +248,7 @@ def main():
     if obstacles_file:
         generate_cmd.extend(["--obstacles", obstacles_file])
     
+    print(f"\n🔧 Running: {' '.join(generate_cmd)}\n")
     result = subprocess.run(generate_cmd)
     if result.returncode != 0:
         print("\n❌ Failed to generate poses", file=sys.stderr)
@@ -293,6 +295,7 @@ def main():
         if args.results:
             visualize_cmd.extend(["--results", args.results])
         
+        print(f"\n🔧 Running: {' '.join(visualize_cmd)}\n")
         result = subprocess.run(visualize_cmd)
         if result.returncode != 0:
             print("\n⚠️  Failed to generate visualization", file=sys.stderr)
