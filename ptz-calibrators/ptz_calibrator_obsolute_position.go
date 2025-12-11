@@ -44,7 +44,7 @@ func (rf *ResidualFunction) Residuals(params []float64) []float64 {
 
 	for i, meas := range rf.Measurements {
 		// World point
-		worldPoint := r3.Vector{X: meas.X, Y: meas.Y, Z: meas.Z}
+		worldPoint := r3.Vector{X: meas.TargetPosition.X, Y: meas.TargetPosition.Y, Z: meas.TargetPosition.Z}
 
 		// Transform world point to camera frame
 		camPoint := utils.TransformPointToCameraFrame(pose, worldPoint)
@@ -84,9 +84,9 @@ func SolveCameraPose(measurements []utils.PTZMeasurement, limits utils.CameraLim
 	// Compute better initial guess: centroid of measurements
 	var sumX, sumY, sumZ float64
 	for _, meas := range measurements {
-		sumX += meas.X
-		sumY += meas.Y
-		sumZ += meas.Z
+		sumX += meas.TargetPosition.X
+		sumY += meas.TargetPosition.Y
+		sumZ += meas.TargetPosition.Z
 	}
 	n := float64(len(measurements))
 	centroidX := sumX / n

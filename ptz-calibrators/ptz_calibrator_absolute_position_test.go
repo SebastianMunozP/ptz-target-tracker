@@ -90,9 +90,11 @@ func TestEndToEnd(t *testing.T) {
 		measurements[i] = utils.PTZMeasurement{
 			Pan:  panNorm,
 			Tilt: tiltNorm,
-			X:    target.X,
-			Y:    target.Y,
-			Z:    target.Z,
+			TargetPosition: r3.Vector{
+				X: target.X,
+				Y: target.Y,
+				Z: target.Z,
+			},
 		}
 	}
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"ptztargettracker/utils"
 	"time"
 
 	"github.com/golang/geo/r3"
@@ -15,15 +16,9 @@ import (
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	genericservice "go.viam.com/rdk/services/generic"
-	"go.viam.com/utils"
+	rdk_utils "go.viam.com/utils"
 	"gonum.org/v1/gonum/mat"
 )
-
-type PTZValues struct {
-	Pan  float64
-	Tilt float64
-	Zoom float64
-}
 
 var (
 	ModelComponentTracker = resource.NewModel("viam", "ptz-target-tracker", "component-tracker")
@@ -154,15 +149,15 @@ type componentTracker struct {
 	panMaxDeg                        float64
 	tiltMinDeg                       float64
 	tiltMaxDeg                       float64
-	samples                          []TrackingSample
+	samples                          []utils.PTZMeasurement
 	calibration                      Calibration
-	lastSentTZValues                 PTZValues
+	lastSentTZValues                 utils.PTZValues
 	deadzone                         float64
 	minZoomDistance                  float64
 	maxZoomDistance                  float64
 	absoluteCalibrationPanPlane      r3.Vector
 	absoluteCalibrationPan0Reference r3.Vector // Direction in panPlane that corresponds to pan=0
-	worker                           *utils.StoppableWorkers
+	worker                           *rdk_utils.StoppableWorkers
 }
 
 // Close implements resource.Resource.
@@ -215,7 +210,7 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 			TiltPolyCoeffs: []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 			IsCalibrated:   false,
 		},
-		worker: utils.NewBackgroundStoppableWorkers(),
+		worker: rdk_utils.NewBackgroundStoppableWorkers(),
 	}
 
 	// Copy calibration if provided
@@ -260,7 +255,7 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			return nil, fmt.Errorf("samples must be an array")
 		}
 
-		var loadedSamples []TrackingSample
+		var loadedSamples []utils.PTZMeasurement
 		for i, sampleRaw := range samplesArray {
 			sampleMap, ok := sampleRaw.(map[string]interface{})
 			if !ok {
@@ -302,19 +297,14 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 				return nil, fmt.Errorf("sample %d Tilt is not a float64", i)
 			}
 
-			// Parse Tag (optional)
-			tag := "manual"
-			if tagRaw, ok := sampleMap["Tag"]; ok {
-				if tagStr, ok := tagRaw.(string); ok {
-					tag = tagStr
-				}
-			}
-
-			sample := TrackingSample{
-				TargetPos: r3.Vector{X: targetX, Y: targetY, Z: targetZ},
-				Pan:       pan,
-				Tilt:      tilt,
-				Tag:       tag,
+			sample := utils.PTZMeasurement{
+				Pan:  pan,
+				Tilt: tilt,
+				TargetPosition: r3.Vector{
+					X: targetX,
+					Y: targetY,
+					Z: targetZ,
+				},
 			}
 			loadedSamples = append(loadedSamples, sample)
 		}
@@ -341,16 +331,14 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			return nil, err
 		}
 
-		tag := "manual"
-		if cmd["tag"] != nil {
-			tag = cmd["tag"].(string)
-		}
-
-		sample := TrackingSample{
-			TargetPos: targetPos,
-			Pan:       ptzValues.Pan,
-			Tilt:      ptzValues.Tilt,
-			Tag:       tag,
+		sample := utils.PTZMeasurement{
+			Pan:  ptzValues.Pan,
+			Tilt: ptzValues.Tilt,
+			TargetPosition: r3.Vector{
+				X: targetPos.X,
+				Y: targetPos.Y,
+				Z: targetPos.Z,
+			},
 		}
 		t.samples = append(t.samples, sample)
 
@@ -359,10 +347,9 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		lastSample := t.samples[len(t.samples)-1]
 		return map[string]interface{}{
 			"sample_number": len(t.samples),
-			"target":        map[string]interface{}{"x": lastSample.TargetPos.X, "y": lastSample.TargetPos.Y, "z": lastSample.TargetPos.Z},
+			"target":        map[string]interface{}{"x": lastSample.TargetPosition.X, "y": lastSample.TargetPosition.Y, "z": lastSample.TargetPosition.Z},
 			"pan":           lastSample.Pan,
 			"tilt":          lastSample.Tilt,
-			"tag":           lastSample.Tag,
 		}, nil
 
 	case "pop-sample":
@@ -374,7 +361,7 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 
 	case "clear-calibration":
 		t.calibration = Calibration{}
-		t.samples = []TrackingSample{}
+		t.samples = []utils.PTZMeasurement{}
 		return map[string]interface{}{"status": "cleared"}, nil
 
 	case "compute-polynomial":
@@ -414,23 +401,23 @@ func (t *componentTracker) getPose(ctx context.Context, componentName string) (*
 	return pose, nil
 }
 
-func (t *componentTracker) getCameraCurrentPTZStatus(ctx context.Context) (PTZValues, error) {
+func (t *componentTracker) getCameraCurrentPTZStatus(ctx context.Context) (utils.PTZValues, error) {
 	ptzStatusResponse, err := t.onvifPTZClient.DoCommand(ctx, map[string]interface{}{
 		"command": "get-status",
 	})
 	if err != nil {
 		t.logger.Errorf("Failed to get PTZ status: %v", err)
-		return PTZValues{}, err
+		return utils.PTZValues{}, err
 	}
 	moveStatus, ok := ptzStatusResponse["move_status"].(map[string]interface{})
 	if !ok {
 		t.logger.Errorf("PTZ move status is not a map")
-		return PTZValues{}, fmt.Errorf("PTZ move status is not a map")
+		return utils.PTZValues{}, fmt.Errorf("PTZ move status is not a map")
 	}
 	movePanTilt, ok := moveStatus["pan_tilt"].(string)
 	if !ok {
 		t.logger.Errorf("PTZ move pan tilt is not a string")
-		return PTZValues{}, fmt.Errorf("PTZ move pan tilt is not a string")
+		return utils.PTZValues{}, fmt.Errorf("PTZ move pan tilt is not a string")
 	}
 	if movePanTilt != "IDLE" {
 		t.logger.Debugf("PTZ pan/tilt is moving (status: %s), reading position anyway", movePanTilt)
@@ -438,7 +425,7 @@ func (t *componentTracker) getCameraCurrentPTZStatus(ctx context.Context) (PTZVa
 	moveZoom, ok := moveStatus["zoom"].(string)
 	if !ok {
 		t.logger.Errorf("PTZ move zoom is not a string")
-		return PTZValues{}, fmt.Errorf("PTZ move zoom is not a string")
+		return utils.PTZValues{}, fmt.Errorf("PTZ move zoom is not a string")
 	}
 	if moveZoom != "IDLE" {
 		t.logger.Debugf("PTZ zoom is moving (status: %s), reading position anyway", moveZoom)
@@ -446,36 +433,36 @@ func (t *componentTracker) getCameraCurrentPTZStatus(ctx context.Context) (PTZVa
 	position, ok := ptzStatusResponse["position"].(map[string]interface{})
 	if !ok {
 		t.logger.Errorf("PTZ status is not a map")
-		return PTZValues{}, fmt.Errorf("PTZ status is not a map")
+		return utils.PTZValues{}, fmt.Errorf("PTZ status is not a map")
 	}
 	zoom, ok := position["zoom"].(map[string]interface{})
 	if !ok {
 		t.logger.Errorf("PTZ zoom is not a map")
-		return PTZValues{}, fmt.Errorf("PTZ zoom is not a map")
+		return utils.PTZValues{}, fmt.Errorf("PTZ zoom is not a map")
 	}
 	zoomX, ok := zoom["x"].(float64)
 	if !ok {
 		t.logger.Errorf("PTZ zoom x is not a float")
-		return PTZValues{}, fmt.Errorf("PTZ zoom x is not a float")
+		return utils.PTZValues{}, fmt.Errorf("PTZ zoom x is not a float")
 	}
 	panTilt, ok := position["pan_tilt"].(map[string]interface{})
 	if !ok {
 		t.logger.Errorf("PTZ pan tilt is not a map")
-		return PTZValues{}, fmt.Errorf("PTZ pan tilt is not a map")
+		return utils.PTZValues{}, fmt.Errorf("PTZ pan tilt is not a map")
 	}
 	panTiltX, ok := panTilt["x"].(float64)
 	if !ok {
 		t.logger.Errorf("PTZ pan tilt x is not a float")
-		return PTZValues{}, fmt.Errorf("PTZ pan tilt x is not a float")
+		return utils.PTZValues{}, fmt.Errorf("PTZ pan tilt x is not a float")
 	}
 	panTiltY, ok := panTilt["y"].(float64)
 	if !ok {
 		t.logger.Errorf("PTZ pan tilt y is not a float")
-		return PTZValues{}, fmt.Errorf("PTZ pan tilt y is not a float")
+		return utils.PTZValues{}, fmt.Errorf("PTZ pan tilt y is not a float")
 	}
 	t.logger.Debugf("PTZ status: zoom=%.1f, pan=%.1f, tilt=%.1f", zoomX, panTiltX, panTiltY)
 
-	return PTZValues{
+	return utils.PTZValues{
 		Pan:  panTiltX,
 		Tilt: panTiltY,
 		Zoom: zoomX,
@@ -503,7 +490,7 @@ func (t *componentTracker) trackingLoop(ctx context.Context) {
 	}
 }
 
-func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues PTZValues) error {
+func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues utils.PTZValues) error {
 	currentPTZValues, err := t.getCameraCurrentPTZStatus(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get current PTZ status: %w", err)
@@ -546,13 +533,13 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues PTZVa
 
 // Fit: pan = Ax² + By² + Cz² + Dxy + Exz + Fyz + Gx + Hy + Iz + J
 func (t *componentTracker) fitPolynomial() (panError, tiltError float64, err error) {
-	t.calibration.PanPolyCoeffs = t.fitPolynomialSingle(func(s TrackingSample) float64 { return s.Pan })
-	t.calibration.TiltPolyCoeffs = t.fitPolynomialSingle(func(s TrackingSample) float64 { return s.Tilt })
+	t.calibration.PanPolyCoeffs = t.fitPolynomialSingle(func(s utils.PTZMeasurement) float64 { return s.Pan })
+	t.calibration.TiltPolyCoeffs = t.fitPolynomialSingle(func(s utils.PTZMeasurement) float64 { return s.Tilt })
 
 	// Calculate errors
 	var panErrSum, tiltErrSum float64
 	for _, s := range t.samples {
-		predPan, predTilt, err := t.calculatePanTiltPolynomial(s.TargetPos)
+		predPan, predTilt, err := t.calculatePanTiltPolynomial(s.TargetPosition)
 		if err != nil {
 			return 0, 0, fmt.Errorf("failed to predict pan/tilt for error calculation: %w", err)
 		}
@@ -605,14 +592,14 @@ func solveLinearSystem10x10(A [10][10]float64, b [10]float64) [10]float64 {
 	return coeffs
 }
 
-func (t *componentTracker) fitPolynomialSingle(getValue func(TrackingSample) float64) []float64 {
+func (t *componentTracker) fitPolynomialSingle(getValue func(utils.PTZMeasurement) float64) []float64 {
 	// Features: [x², y², z², xy, xz, yz, x, y, z, 1]
 	// Build normal equations
 	var XtX [10][10]float64
 	var XtY [10]float64
 
 	for _, s := range t.samples {
-		x, y, z := s.TargetPos.X, s.TargetPos.Y, s.TargetPos.Z
+		x, y, z := s.TargetPosition.X, s.TargetPosition.Y, s.TargetPosition.Z
 		features := [10]float64{
 			x * x, y * y, z * z,
 			x * y, x * z, y * z,
@@ -657,15 +644,15 @@ func (t *componentTracker) calculatePanTiltPolynomial(pos r3.Vector) (pan, tilt 
 	return pan, tilt, nil
 }
 
-func (t *componentTracker) calculatePanTiltZoom(ctx context.Context, targetPos r3.Vector) (ptzValues PTZValues, err error) {
+func (t *componentTracker) calculatePanTiltZoom(ctx context.Context, targetPos r3.Vector) (ptzValues utils.PTZValues, err error) {
 	cameraPose, err := t.getPose(ctx, t.cfg.PTZCameraName)
 	if err != nil {
-		return PTZValues{}, fmt.Errorf("failed to get camera pose: %w", err)
+		return utils.PTZValues{}, fmt.Errorf("failed to get camera pose: %w", err)
 	}
 	cameraPos := cameraPose.Pose().Point()
 	ptzValues.Pan, ptzValues.Tilt, err = t.calculatePanTiltPolynomial(targetPos)
 	if err != nil {
-		return PTZValues{}, err
+		return utils.PTZValues{}, err
 	}
 	ptzValues.Zoom = t.calculateZoom(targetPos, cameraPos)
 	return ptzValues, nil

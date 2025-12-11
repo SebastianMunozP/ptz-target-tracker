@@ -7,13 +7,17 @@ import (
 	"go.viam.com/rdk/spatialmath"
 )
 
-// PTZMeasurement is your calibration point structure
-type PTZMeasurement struct {
+type PTZValues struct {
 	Pan  float64
 	Tilt float64
-	X    float64
-	Y    float64
-	Z    float64
+	Zoom float64
+}
+
+// PTZMeasurement is your calibration point structure
+type PTZMeasurement struct {
+	Pan            float64
+	Tilt           float64
+	TargetPosition r3.Vector
 }
 
 // CameraLimits defines the physical angular limits of the PTZ camera

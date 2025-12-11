@@ -16,9 +16,9 @@ func ValidateMeasurements(measurements []PTZMeasurement) {
 	// Compute centroid
 	var cx, cy, cz float64
 	for _, m := range measurements {
-		cx += m.X
-		cy += m.Y
-		cz += m.Z
+		cx += m.TargetPosition.X
+		cy += m.TargetPosition.Y
+		cz += m.TargetPosition.Z
 	}
 	cx /= float64(n)
 	cy /= float64(n)
@@ -27,9 +27,9 @@ func ValidateMeasurements(measurements []PTZMeasurement) {
 	// Compute standard deviations
 	var stdX, stdY, stdZ float64
 	for _, m := range measurements {
-		stdX += (m.X - cx) * (m.X - cx)
-		stdY += (m.Y - cy) * (m.Y - cy)
-		stdZ += (m.Z - cz) * (m.Z - cz)
+		stdX += (m.TargetPosition.X - cx) * (m.TargetPosition.X - cx)
+		stdY += (m.TargetPosition.Y - cy) * (m.TargetPosition.Y - cy)
+		stdZ += (m.TargetPosition.Z - cz) * (m.TargetPosition.Z - cz)
 	}
 	stdX = math.Sqrt(stdX / float64(n))
 	stdY = math.Sqrt(stdY / float64(n))
@@ -42,9 +42,9 @@ func ValidateMeasurements(measurements []PTZMeasurement) {
 	// Depth variation
 	var depthVar float64
 	for _, m := range measurements {
-		dx := m.X - cx
-		dy := m.Y - cy
-		dz := m.Z - cz
+		dx := m.TargetPosition.X - cx
+		dy := m.TargetPosition.Y - cy
+		dz := m.TargetPosition.Z - cz
 		depthVar += (dx*dx + dy*dy + dz*dz)
 	}
 	depthStd := math.Sqrt(depthVar / float64(n))
@@ -68,7 +68,7 @@ func ValidateCalibration(measurements []PTZMeasurement, cameraPose *CameraPose, 
 	validCount := 0
 
 	for i, m := range measurements {
-		result := XYZToPanTilt(m.X, m.Y, m.Z, cameraPose)
+		result := XYZToPanTilt(m.TargetPosition.X, m.TargetPosition.Y, m.TargetPosition.Z, cameraPose)
 
 		panOrigDeg := NormalizedToDegrees(m.Pan, cameraPose.Limits.PanMinDeg, cameraPose.Limits.PanMaxDeg)
 		tiltOrigDeg := NormalizedToDegrees(m.Tilt, cameraPose.Limits.TiltMinDeg, cameraPose.Limits.TiltMaxDeg)
