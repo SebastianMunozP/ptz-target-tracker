@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"ptztargettracker/trackers"
 	"ptztargettracker/utils"
 	"time"
 
@@ -16,8 +17,8 @@ import (
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	genericservice "go.viam.com/rdk/services/generic"
+	"go.viam.com/rdk/spatialmath"
 	rdk_utils "go.viam.com/utils"
-	"gonum.org/v1/gonum/mat"
 )
 
 var (
@@ -34,19 +35,22 @@ func init() {
 }
 
 type Config struct {
-	TargetComponentName string      `json:"target_component_name"`
-	PTZCameraName       string      `json:"ptz_camera_name"`
-	OnvifPTZClientName  string      `json:"onvif_ptz_client_name"`
-	UpdateRateHz        float64     `json:"update_rate_hz"`
-	EnableOnStart       bool        `json:"enable_on_start"`
-	PanMinDeg           float64     `json:"pan_min_deg"`
-	PanMaxDeg           float64     `json:"pan_max_deg"`
-	TiltMinDeg          float64     `json:"tilt_min_deg"`
-	TiltMaxDeg          float64     `json:"tilt_max_deg"`
-	MinZoomDistanceMM   float64     `json:"min_zoom_distance_mm"`
-	MaxZoomDistanceMM   float64     `json:"max_zoom_distance_mm"`
-	Deadzone            float64     `json:"deadzone"`
-	Calibration         Calibration `json:"calibration"`
+	TargetComponentName string   `json:"target_component_name"`
+	PTZCameraName       string   `json:"ptz_camera_name"`
+	OnvifPTZClientName  string   `json:"onvif_ptz_client_name"`
+	UpdateRateHz        float64  `json:"update_rate_hz"`
+	EnableOnStart       bool     `json:"enable_on_start"`
+	PanMinDeg           float64  `json:"pan_min_deg"`
+	PanMaxDeg           float64  `json:"pan_max_deg"`
+	TiltMinDeg          float64  `json:"tilt_min_deg"`
+	TiltMaxDeg          float64  `json:"tilt_max_deg"`
+	MinZoomDistanceMM   float64  `json:"min_zoom_distance_mm"`
+	MaxZoomDistanceMM   float64  `json:"max_zoom_distance_mm"`
+	Deadzone            *float64 `json:"deadzone,omitempty"`
+
+	TrackingMethod                    string                          `json:"tracking_method"` // "absolute_position" or "polynomial"
+	PolynomialMethodCalibration       *trackers.PolynomialCalibration `json:"polynomial_method_calibration,omitempty"`
+	AbsolutePositionMethodCalibration *spatialmath.Pose               `json:"absolute_position_method_calibration,omitempty"` // Only for absolute position
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -81,29 +85,39 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	if cfg.TiltMaxDeg <= cfg.TiltMinDeg {
 		return nil, nil, errors.New("tilt_max_deg must be greater than tilt_min_deg")
 	}
-	if cfg.Deadzone < 0 || cfg.Deadzone > 1 {
+	if cfg.Deadzone != nil && (*cfg.Deadzone < 0 || *cfg.Deadzone > 1) {
 		return nil, nil, errors.New("deadzone must be greater than or equal to 0 and less than or equal to 1 (normalized range)")
 	}
+
+	// Zoom distance validation
 	if cfg.MinZoomDistanceMM < 0 {
 		return nil, nil, errors.New("min_zoom_distance_mm must be greater than or equal to 0")
 	}
 	if cfg.MaxZoomDistanceMM < 0 {
 		return nil, nil, errors.New("max_zoom_distance_mm must be greater than or equal to 0")
 	}
-	if cfg.Calibration.IsCalibrated {
-		if len(cfg.Calibration.PanPolyCoeffs) != 10 {
+	if cfg.MinZoomDistanceMM > cfg.MaxZoomDistanceMM {
+		return nil, nil, errors.New("max_zoom_distance_mm must be greater than or equal to min_zoom_distance_mm")
+	}
+
+	// Tracking method validation
+	if cfg.TrackingMethod != "absolute_position" && cfg.TrackingMethod != "polynomial" {
+		return nil, nil, errors.New("tracking_method must be either 'absolute_position' or 'polynomial'")
+	}
+	if cfg.PolynomialMethodCalibration != nil {
+		if len(cfg.PolynomialMethodCalibration.PanPolyCoeffs) != 10 {
 			return nil, nil, errors.New("pan_poly_coeffs must have exactly 10 coefficients")
 		}
-		if len(cfg.Calibration.TiltPolyCoeffs) != 10 {
+		if len(cfg.PolynomialMethodCalibration.TiltPolyCoeffs) != 10 {
 			return nil, nil, errors.New("tilt_poly_coeffs must have exactly 10 coefficients")
 		}
 		// Check if all coefficients are valid numbers
-		for _, coeff := range cfg.Calibration.PanPolyCoeffs {
+		for _, coeff := range cfg.PolynomialMethodCalibration.PanPolyCoeffs {
 			if math.IsNaN(coeff) || math.IsInf(coeff, 0) {
 				return nil, nil, errors.New("pan_poly_coeffs must contain valid numbers")
 			}
 		}
-		for _, coeff := range cfg.Calibration.TiltPolyCoeffs {
+		for _, coeff := range cfg.PolynomialMethodCalibration.TiltPolyCoeffs {
 			if math.IsNaN(coeff) || math.IsInf(coeff, 0) {
 				return nil, nil, errors.New("tilt_poly_coeffs must contain valid numbers")
 			}
@@ -112,24 +126,9 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	return nil, nil, nil
 }
 
-type TrackingSample struct {
-	TargetPos r3.Vector
-	Pan       float64
-	Tilt      float64
-	Tag       string
-}
-
-type Calibration struct {
-	PanPolyCoeffs  []float64 `json:"pan_poly_coeffs"`
-	TiltPolyCoeffs []float64 `json:"tilt_poly_coeffs"`
-	IsCalibrated   bool      `json:"is_calibrated"`
-}
-
 const panSpeed = 1.0
 const tiltSpeed = 1.0
 const zoomSpeed = 1.0
-const minZoomValue = 0.0
-const maxZoomValue = 1.0
 
 type componentTracker struct {
 	resource.AlwaysRebuild
@@ -138,26 +137,28 @@ type componentTracker struct {
 	logger logging.Logger
 	cfg    *Config
 
+	// Target component related fields
 	frameSystemService  framesystem.Service
 	targetComponentName string
-	onvifPTZClientName  string
 
-	onvifPTZClient generic.Resource
+	// ONVIF PTZ client related fields
+	onvifPTZClientName string
+	onvifPTZClient     generic.Resource
 
-	updateRateHz                     float64
-	panMinDeg                        float64
-	panMaxDeg                        float64
-	tiltMinDeg                       float64
-	tiltMaxDeg                       float64
-	samples                          []utils.PTZMeasurement
-	calibration                      Calibration
-	lastSentTZValues                 utils.PTZValues
-	deadzone                         float64
-	minZoomDistance                  float64
-	maxZoomDistance                  float64
-	absoluteCalibrationPanPlane      r3.Vector
-	absoluteCalibrationPan0Reference r3.Vector // Direction in panPlane that corresponds to pan=0
-	worker                           *rdk_utils.StoppableWorkers
+	// Calibration related fields
+	samples                           []utils.PTZMeasurement
+	tracker                           trackers.Tracker
+	polynomialMethodCalibration       trackers.PolynomialCalibration
+	absolutePositionMethodCalibration spatialmath.Pose
+
+	// PTZ related fields
+	lastSentTZValues utils.PTZValues
+	deadzone         float64
+	cameraLimits     utils.CameraLimits
+
+	// Worker related fields
+	updateRateHz float64
+	worker       *rdk_utils.StoppableWorkers
 }
 
 // Close implements resource.Resource.
@@ -198,27 +199,29 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 		targetComponentName: conf.TargetComponentName,
 		onvifPTZClient:      onvifPTZClient,
 		updateRateHz:        conf.UpdateRateHz,
-		panMinDeg:           conf.PanMinDeg,
-		panMaxDeg:           conf.PanMaxDeg,
-		tiltMinDeg:          conf.TiltMinDeg,
-		tiltMaxDeg:          conf.TiltMaxDeg,
-		deadzone:            conf.Deadzone,
-		minZoomDistance:     conf.MinZoomDistanceMM,
-		maxZoomDistance:     conf.MaxZoomDistanceMM,
-		calibration: Calibration{
-			PanPolyCoeffs:  []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-			TiltPolyCoeffs: []float64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-			IsCalibrated:   false,
+		cameraLimits: utils.CameraLimits{
+			ZoomMinNormalized: 0.0,
+			ZoomMaxNormalized: 1.0,
+			ZoomMinDistanceMM: conf.MinZoomDistanceMM,
+			ZoomMaxDistanceMM: conf.MaxZoomDistanceMM,
+			PanMinDeg:         conf.PanMinDeg,
+			PanMaxDeg:         conf.PanMaxDeg,
+			TiltMinDeg:        conf.TiltMinDeg,
+			TiltMaxDeg:        conf.TiltMaxDeg,
 		},
+		deadzone: func() float64 {
+			if conf.Deadzone != nil {
+				return *conf.Deadzone
+			}
+			return 0.0
+		}(),
 		worker: rdk_utils.NewBackgroundStoppableWorkers(),
 	}
 
 	// Copy calibration if provided
 	s.logger.Debugf("Creating component tracker with config: %+v", conf)
-	if conf.Calibration.IsCalibrated && len(conf.Calibration.PanPolyCoeffs) > 0 {
-		s.calibration = conf.Calibration
-		s.logger.Infof("Created component with calibration: %+v", s.calibration)
-	}
+	s.cfg.PolynomialMethodCalibration = conf.PolynomialMethodCalibration
+	s.cfg.AbsolutePositionMethodCalibration = conf.AbsolutePositionMethodCalibration
 
 	if conf.EnableOnStart {
 		s.logger.Info("Starting PTZ component tracker on start")
@@ -360,16 +363,34 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 		return map[string]interface{}{"status": "removed", "index": len(t.samples)}, nil
 
 	case "clear-calibration":
-		t.calibration = Calibration{}
+		t.tracker = nil
 		t.samples = []utils.PTZMeasurement{}
 		return map[string]interface{}{"status": "cleared"}, nil
 
-	case "compute-polynomial":
-		if len(t.samples) < 10 {
-			return nil, fmt.Errorf("need at least 10 samples for polynomial fit, have %d", len(t.samples))
-		}
+	case "calibrate":
 
-		panErr, tiltErr, err := t.fitPolynomial()
+		var err error
+		if t.cfg.TrackingMethod == "polynomial" {
+			if len(t.samples) < trackers.PolynomialTrackerMinSamples {
+				return nil, fmt.Errorf("need at least %d samples for polynomial fit, have %d", trackers.PolynomialTrackerMinSamples, len(t.samples))
+			}
+			t.tracker, err = trackers.NewPolynomialTracker(t.logger, t.cameraLimits)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			if len(t.samples) < trackers.AbsolutePositionTrackerMinSamples {
+				return nil, fmt.Errorf("need at least %d samples for absolute position fit, have %d", trackers.AbsolutePositionTrackerMinSamples, len(t.samples))
+			}
+			t.tracker, err = trackers.NewAbsolutePositionTracker(t.logger, t.cameraLimits)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if t == nil {
+			return nil, fmt.Errorf("tracker is nil after calibration")
+		}
+		err = t.tracker.Calibrate(t.samples)
 		if err != nil {
 			return map[string]interface{}{
 				"status": "error",
@@ -377,15 +398,41 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			}, nil
 		}
 
-		return map[string]interface{}{
-			"status":           "success",
-			"pan_error_avg":    panErr,
-			"tilt_error_avg":   tiltErr,
-			"samples_used":     len(t.samples),
-			"is_calibrated":    t.calibration.IsCalibrated,
-			"pan_poly_coeffs":  []float64{t.calibration.PanPolyCoeffs[0], t.calibration.PanPolyCoeffs[1], t.calibration.PanPolyCoeffs[2], t.calibration.PanPolyCoeffs[3], t.calibration.PanPolyCoeffs[4], t.calibration.PanPolyCoeffs[5], t.calibration.PanPolyCoeffs[6], t.calibration.PanPolyCoeffs[7], t.calibration.PanPolyCoeffs[8], t.calibration.PanPolyCoeffs[9]},
-			"tilt_poly_coeffs": []float64{t.calibration.TiltPolyCoeffs[0], t.calibration.TiltPolyCoeffs[1], t.calibration.TiltPolyCoeffs[2], t.calibration.TiltPolyCoeffs[3], t.calibration.TiltPolyCoeffs[4], t.calibration.TiltPolyCoeffs[5], t.calibration.TiltPolyCoeffs[6], t.calibration.TiltPolyCoeffs[7], t.calibration.TiltPolyCoeffs[8], t.calibration.TiltPolyCoeffs[9]},
-		}, nil
+		if provider, ok := t.tracker.(trackers.PolynomialCalibrationProvider); ok {
+			polyTracker, ok := provider.(*trackers.PolynomialTracker)
+			if !ok {
+				return nil, fmt.Errorf("tracker is not a polynomial tracker")
+			}
+			polynomialCalibration, err := polyTracker.GetCalibration()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get polynomial calibration: %w", err)
+			}
+			t.logger.Infof("Calibrated with polynomial coefficients: pan=%v, tilt=%v",
+				polynomialCalibration.PanPolyCoeffs, polynomialCalibration.TiltPolyCoeffs)
+			return map[string]interface{}{
+				"status":           "success",
+				"samples_used":     len(t.samples),
+				"pan_poly_coeffs":  polynomialCalibration.PanPolyCoeffs,
+				"tilt_poly_coeffs": polynomialCalibration.TiltPolyCoeffs,
+			}, nil
+		} else if provider, ok := t.tracker.(trackers.AbsolutePositionCalibrationProvider); ok {
+			absolutePositionTracker, ok := provider.(*trackers.AbsolutePositionTracker)
+			if !ok {
+				return nil, fmt.Errorf("tracker is not an absolute position tracker")
+			}
+			absolutePositionCalibration, err := absolutePositionTracker.GetCalibration()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get absolute position calibration: %w", err)
+			}
+			t.logger.Infof("Calibrated with camera pose: %v", absolutePositionCalibration)
+			return map[string]interface{}{
+				"status":       "success",
+				"samples_used": len(t.samples),
+				"camera_pose":  absolutePositionCalibration,
+			}, nil
+		}
+		// If we get here, it means the tracker is not a polynomial or absolute position tracker
+		return map[string]interface{}{"status": "error", "message": "tracker is not a polynomial or absolute position tracker"}, nil
 
 	default:
 		return nil, fmt.Errorf("invalid command: %v", cmd["command"])
@@ -531,165 +578,24 @@ func (t *componentTracker) sendAbsoluteMove(ctx context.Context, ptzValues utils
 	return nil
 }
 
-// Fit: pan = Ax² + By² + Cz² + Dxy + Exz + Fyz + Gx + Hy + Iz + J
-func (t *componentTracker) fitPolynomial() (panError, tiltError float64, err error) {
-	t.calibration.PanPolyCoeffs = t.fitPolynomialSingle(func(s utils.PTZMeasurement) float64 { return s.Pan })
-	t.calibration.TiltPolyCoeffs = t.fitPolynomialSingle(func(s utils.PTZMeasurement) float64 { return s.Tilt })
-
-	// Calculate errors
-	var panErrSum, tiltErrSum float64
-	for _, s := range t.samples {
-		predPan, predTilt, err := t.calculatePanTiltPolynomial(s.TargetPosition)
-		if err != nil {
-			return 0, 0, fmt.Errorf("failed to predict pan/tilt for error calculation: %w", err)
-		}
-		panErrSum += math.Abs(predPan - s.Pan)
-		tiltErrSum += math.Abs(predTilt - s.Tilt)
-	}
-
-	n := float64(len(t.samples))
-	panError = panErrSum / n
-	tiltError = tiltErrSum / n
-
-	t.logger.Infof("Polynomial fit complete: avg error pan=%.5f, tilt=%.5f", panError, tiltError)
-
-	t.calibration.IsCalibrated = true
-	return panError, tiltError, nil
-}
-
-func solveLinearSystem10x10(A [10][10]float64, b [10]float64) [10]float64 {
-	// Convert to gonum matrices
-	aData := make([]float64, 100)
-	for i := 0; i < 10; i++ {
-		for j := 0; j < 10; j++ {
-			aData[i*10+j] = A[i][j]
-		}
-	}
-
-	bData := make([]float64, 10)
-	copy(bData, b[:])
-
-	aMat := mat.NewDense(10, 10, aData)
-	bMat := mat.NewDense(10, 1, bData)
-
-	// Solve using QR decomposition
-	var qr mat.QR
-	qr.Factorize(aMat)
-
-	var result mat.Dense
-	err := qr.SolveTo(&result, false, bMat)
-	if err != nil {
-		// Return zeros if singular
-		return [10]float64{}
-	}
-
-	// Extract coefficients
-	var coeffs [10]float64
-	for i := 0; i < 10; i++ {
-		coeffs[i] = result.At(i, 0)
-	}
-
-	return coeffs
-}
-
-func (t *componentTracker) fitPolynomialSingle(getValue func(utils.PTZMeasurement) float64) []float64 {
-	// Features: [x², y², z², xy, xz, yz, x, y, z, 1]
-	// Build normal equations
-	var XtX [10][10]float64
-	var XtY [10]float64
-
-	for _, s := range t.samples {
-		x, y, z := s.TargetPosition.X, s.TargetPosition.Y, s.TargetPosition.Z
-		features := [10]float64{
-			x * x, y * y, z * z,
-			x * y, x * z, y * z,
-			x, y, z, 1,
-		}
-		val := getValue(s)
-
-		for i := 0; i < 10; i++ {
-			XtY[i] += features[i] * val
-			for j := 0; j < 10; j++ {
-				XtX[i][j] += features[i] * features[j]
-			}
-		}
-	}
-
-	coeffs := solveLinearSystem10x10(XtX, XtY)
-	// Convert array to slice
-	return coeffs[:]
-}
-
-func (t *componentTracker) calculatePanTiltPolynomial(pos r3.Vector) (pan, tilt float64, err error) {
-	x, y, z := pos.X, pos.Y, pos.Z
-	features := [10]float64{
-		x * x, y * y, z * z,
-		x * y, x * z, y * z,
-		x, y, z, 1,
-	}
-
-	pan, tilt = 0, 0
-	if len(t.calibration.PanPolyCoeffs) != len(t.calibration.TiltPolyCoeffs) {
-		t.logger.Errorf("Calibration polynomial coefficient length mismatch: pan=%d, tilt=%d", len(t.calibration.PanPolyCoeffs), len(t.calibration.TiltPolyCoeffs))
-		return 0, 0, fmt.Errorf("Calibration polynomial coefficient length mismatch: pan=%d, tilt=%d", len(t.calibration.PanPolyCoeffs), len(t.calibration.TiltPolyCoeffs))
-	}
-	if len(features) != len(t.calibration.PanPolyCoeffs) {
-		t.logger.Errorf("Feature length mismatch: features=%d, pan_coeffs=%d", len(features), len(t.calibration.PanPolyCoeffs))
-		return 0, 0, fmt.Errorf("Feature length mismatch: features=%d, pan_coeffs=%d", len(features), len(t.calibration.PanPolyCoeffs))
-	}
-	for i := range features {
-		pan += t.calibration.PanPolyCoeffs[i] * features[i]
-		tilt += t.calibration.TiltPolyCoeffs[i] * features[i]
-	}
-	return pan, tilt, nil
-}
-
 func (t *componentTracker) calculatePanTiltZoom(ctx context.Context, targetPos r3.Vector) (ptzValues utils.PTZValues, err error) {
 	cameraPose, err := t.getPose(ctx, t.cfg.PTZCameraName)
 	if err != nil {
 		return utils.PTZValues{}, fmt.Errorf("failed to get camera pose: %w", err)
 	}
-	cameraPos := cameraPose.Pose().Point()
-	ptzValues.Pan, ptzValues.Tilt, err = t.calculatePanTiltPolynomial(targetPos)
+	if t.tracker == nil {
+		return utils.PTZValues{}, errors.New("not calibrated - run calibrate first")
+	}
+	ptzValues, err = t.tracker.CalculatePTZ(targetPos, cameraPose.Pose())
 	if err != nil {
 		return utils.PTZValues{}, err
 	}
-	ptzValues.Zoom = t.calculateZoom(targetPos, cameraPos)
 	return ptzValues, nil
-}
-func (t *componentTracker) calculateZoom(pos r3.Vector, cameraPos r3.Vector) float64 {
-	distance := pos.Distance(cameraPos)
-	t.logger.Debugf("calculateZoom: calculating zoom for distance: %.2f mm, minZoomDistance: %.2f mm, maxZoomDistance: %.2f mm, minZoomValue: %.2f, maxZoomValue: %.2f\n", distance, t.minZoomDistance, t.maxZoomDistance, minZoomValue, maxZoomValue)
-
-	// Clamp distance to [minZoomDistance, maxZoomDistance]
-	// Closer = zoomed out (minZoomValue), farther = zoomed in (maxZoomValue)
-	if distance <= t.minZoomDistance {
-		t.logger.Debugf("calculateZoom: closest: zoomed out, zoom: %.2f", minZoomValue)
-		return minZoomValue // Closest: zoomed out
-	}
-	if distance >= t.maxZoomDistance {
-		t.logger.Debugf("calculateZoom: farthest: zoomed in, zoom: %.2f", maxZoomValue)
-		return maxZoomValue // Farthest: zoomed in
-	}
-
-	// Linear interpolation between minZoomDistance and maxZoomDistance
-	// Normalized distance: 0 at minZoomDistance, 1 at maxZoomDistance
-	// Zoom: minZoomValue at minZoomDistance (closest), maxZoomValue at maxZoomDistance (farthest)
-	if (t.maxZoomDistance - t.minZoomDistance) > 0 {
-		normalizedDistance := (distance - t.minZoomDistance) / (t.maxZoomDistance - t.minZoomDistance)
-		zoom := minZoomValue + (maxZoomValue-minZoomValue)*normalizedDistance
-		t.logger.Debugf("calculateZoom: zoom: %.2f normalizedDistance: %.2f, distance: %.2f mm", zoom, normalizedDistance, distance)
-		return zoom
-	} else {
-		t.logger.Debugf("calculateZoom: minZoomDistance == maxZoomDistance, zoom: %.2f", minZoomValue)
-		return minZoomValue
-	}
 }
 
 func (t *componentTracker) trackTarget(ctx context.Context) error {
-	// Only require calibration for polynomial-fit mode
-	if !t.calibration.IsCalibrated {
-		return errors.New("not calibrated - run compute-polynomial first")
+	if t.tracker == nil {
+		return errors.New("not calibrated - run calibrate first")
 	}
 
 	targetPose, err := t.getPose(ctx, t.targetComponentName)
@@ -705,8 +611,5 @@ func (t *componentTracker) trackTarget(ctx context.Context) error {
 	}
 	t.logger.Debugf("Predicted pan: %.1f, tilt: %.1f, zoom: %.1f", ptzValues.Pan, ptzValues.Tilt, ptzValues.Zoom)
 
-	// Clamp
-	ptzValues.Pan = math.Max(-1.0, math.Min(1.0, ptzValues.Pan))
-	ptzValues.Tilt = math.Max(-1.0, math.Min(1.0, ptzValues.Tilt))
 	return t.sendAbsoluteMove(ctx, ptzValues)
 }

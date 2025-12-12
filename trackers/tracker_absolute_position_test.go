@@ -1,4 +1,4 @@
-package ptzcalibrators
+package trackers
 
 import (
 	"math"
@@ -8,17 +8,6 @@ import (
 	"github.com/golang/geo/r3"
 	"go.viam.com/rdk/spatialmath"
 )
-
-func vectorsAlmostEqual(v1, v2 r3.Vector, tol float64) bool {
-	return abs(v1.X-v2.X) < tol && abs(v1.Y-v2.Y) < tol && abs(v1.Z-v2.Z) < tol
-}
-
-func abs(a float64) float64 {
-	if a < 0 {
-		return -a
-	}
-	return a
-}
 
 func TestEndToEnd(t *testing.T) {
 	// For this test, we'll assume the camera is at position (-1, -1, 0)
@@ -130,7 +119,7 @@ func TestEndToEnd(t *testing.T) {
 
 	// Example usage
 	t.Logf("\n\nExample: Track new target")
-	result := XYZToPanTilt(0.8, 0.3, 2.2, cameraPose)
+	result := XYZToPanTilt(r3.Vector{X: 0.8, Y: 0.3, Z: 2.2}, cameraPose)
 	t.Logf("Target: [0.800, 0.300, 2.200]\n")
 	if result.IsValid {
 		t.Logf("✓ Pan: %.3f, Tilt: %.3f (normalized)\n",

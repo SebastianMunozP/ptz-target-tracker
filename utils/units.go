@@ -22,10 +22,18 @@ type PTZMeasurement struct {
 
 // CameraLimits defines the physical angular limits of the PTZ camera
 type CameraLimits struct {
-	PanMinDeg  float64
-	PanMaxDeg  float64
-	TiltMinDeg float64
-	TiltMaxDeg float64
+	PanMinNormalized  float64
+	PanMaxNormalized  float64
+	TiltMinNormalized float64
+	TiltMaxNormalized float64
+	ZoomMinNormalized float64
+	ZoomMaxNormalized float64
+	PanMinDeg         float64
+	PanMaxDeg         float64
+	TiltMinDeg        float64
+	TiltMaxDeg        float64
+	ZoomMinDistanceMM float64
+	ZoomMaxDistanceMM float64
 }
 
 var DefaultCameraLimits = CameraLimits{
@@ -49,6 +57,25 @@ type PanTiltResult struct {
 type CameraPose struct {
 	Pose   spatialmath.Pose
 	Limits CameraLimits
+}
+
+func ClampPTZValues(ptzValues PTZValues, limits CameraLimits) PTZValues {
+	return PTZValues{
+		Pan:  Clamp(ptzValues.Pan, limits.PanMinNormalized, limits.PanMaxNormalized),
+		Tilt: Clamp(ptzValues.Tilt, limits.TiltMinNormalized, limits.TiltMaxNormalized),
+		Zoom: Clamp(ptzValues.Zoom, limits.ZoomMinNormalized, limits.ZoomMaxNormalized),
+	}
+}
+
+// Clamp clamps a value between min and max
+func Clamp(value, min, max float64) float64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 // Helper functions for coordinate conversions
@@ -109,5 +136,29 @@ func TransformPointToCameraFrame(cameraPose spatialmath.Pose, worldPoint r3.Vect
 		X: rotMat.At(0, 0)*diff.X + rotMat.At(1, 0)*diff.Y + rotMat.At(2, 0)*diff.Z,
 		Y: rotMat.At(0, 1)*diff.X + rotMat.At(1, 1)*diff.Y + rotMat.At(2, 1)*diff.Z,
 		Z: rotMat.At(0, 2)*diff.X + rotMat.At(1, 2)*diff.Y + rotMat.At(2, 2)*diff.Z,
+	}
+}
+
+func CalculateZoom(targetPos r3.Vector, cameraPos r3.Vector, cameraLimits CameraLimits) float64 {
+	distance := targetPos.Distance(cameraPos)
+
+	// Clamp distance to [minZoomDistance, maxZoomDistance]
+	// Closer = zoomed out (minZoomValue), farther = zoomed in (maxZoomValue)
+	if distance <= cameraLimits.ZoomMinDistanceMM {
+		return cameraLimits.ZoomMinNormalized // Closest: zoomed out
+	}
+	if distance >= cameraLimits.ZoomMaxDistanceMM {
+		return cameraLimits.ZoomMaxNormalized // Farthest: zoomed in
+	}
+
+	// Linear interpolation between minZoomDistance and maxZoomDistance
+	// Normalized distance: 0 at minZoomDistance, 1 at maxZoomDistance
+	// Zoom: minZoomValue at minZoomDistance (closest), maxZoomValue at maxZoomDistance (farthest)
+	if (cameraLimits.ZoomMaxDistanceMM - cameraLimits.ZoomMinDistanceMM) > 0 {
+		normalizedDistance := (distance - cameraLimits.ZoomMinDistanceMM) / (cameraLimits.ZoomMaxDistanceMM - cameraLimits.ZoomMinDistanceMM)
+		zoom := cameraLimits.ZoomMinNormalized + (cameraLimits.ZoomMaxNormalized-cameraLimits.ZoomMinNormalized)*normalizedDistance
+		return zoom
+	} else {
+		return cameraLimits.ZoomMinNormalized
 	}
 }

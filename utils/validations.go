@@ -3,6 +3,8 @@ package utils
 import (
 	"fmt"
 	"math"
+
+	"github.com/golang/geo/r3"
 )
 
 // ValidateMeasurements checks quality of measurements
@@ -59,7 +61,7 @@ func ValidateMeasurements(measurements []PTZMeasurement) {
 }
 
 // TestCalibration validates solved pose
-func ValidateCalibration(measurements []PTZMeasurement, cameraPose *CameraPose, XYZToPanTilt func(x, y, z float64, camera *CameraPose) PanTiltResult) {
+func ValidateCalibration(measurements []PTZMeasurement, cameraPose *CameraPose, XYZToPanTilt func(targetPosition r3.Vector, camera *CameraPose) PanTiltResult) {
 	fmt.Println("\nCalibration Validation:")
 	fmt.Println("Point | Pan Error (°) | Tilt Error (°) | Status")
 	fmt.Println("------|---------------|----------------|--------")
@@ -68,7 +70,7 @@ func ValidateCalibration(measurements []PTZMeasurement, cameraPose *CameraPose, 
 	validCount := 0
 
 	for i, m := range measurements {
-		result := XYZToPanTilt(m.TargetPosition.X, m.TargetPosition.Y, m.TargetPosition.Z, cameraPose)
+		result := XYZToPanTilt(m.TargetPosition, cameraPose)
 
 		panOrigDeg := NormalizedToDegrees(m.Pan, cameraPose.Limits.PanMinDeg, cameraPose.Limits.PanMaxDeg)
 		tiltOrigDeg := NormalizedToDegrees(m.Tilt, cameraPose.Limits.TiltMinDeg, cameraPose.Limits.TiltMaxDeg)

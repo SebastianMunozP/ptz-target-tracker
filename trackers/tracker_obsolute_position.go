@@ -1,4 +1,4 @@
-package ptzcalibrators
+package trackers
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"ptztargettracker/utils"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/spatialmath"
 	"gonum.org/v1/gonum/optimize"
 )
@@ -147,17 +148,13 @@ func SolveCameraPose(measurements []utils.PTZMeasurement, limits utils.CameraLim
 }
 
 // XYZToPanTilt converts world coordinates to normalized pan/tilt
-func XYZToPanTilt(x, y, z float64, cameraPose *utils.CameraPose) utils.PanTiltResult {
-	// World point
-	worldPoint := r3.Vector{X: x, Y: y, Z: z}
-
+func XYZToPanTilt(targetPosition r3.Vector, cameraPose *utils.CameraPose) utils.PanTiltResult {
 	// Transform to camera frame
-	camPoint := utils.TransformPointToCameraFrame(cameraPose.Pose, worldPoint)
+	targetPositionInCameraFrame := utils.TransformPointToCameraFrame(cameraPose.Pose, targetPosition)
 
-	cx := camPoint.X
-	cy := camPoint.Y
-	cz := camPoint.Z
-
+	cx := targetPositionInCameraFrame.X
+	cy := targetPositionInCameraFrame.Y
+	cz := targetPositionInCameraFrame.Z
 	// Check if behind camera
 	if cz < 0 {
 		return utils.PanTiltResult{
@@ -217,4 +214,53 @@ func XYZToPanTilt(x, y, z float64, cameraPose *utils.CameraPose) utils.PanTiltRe
 		IsValid:        isValid,
 		ErrorMessage:   errorMsg,
 	}
+}
+
+type AbsolutePositionTracker struct {
+	logger       logging.Logger
+	cameraLimits utils.CameraLimits
+	samples      []utils.PTZMeasurement
+	cameraPose   *utils.CameraPose
+}
+
+const AbsolutePositionTrackerMinSamples = 6
+
+func NewAbsolutePositionTracker(logger logging.Logger, cameraLimits utils.CameraLimits) (*AbsolutePositionTracker, error) {
+	return &AbsolutePositionTracker{
+		logger:       logger,
+		cameraLimits: cameraLimits,
+	}, nil
+}
+
+func (a *AbsolutePositionTracker) Calibrate(measurements []utils.PTZMeasurement) error {
+	a.samples = measurements
+	cameraPose, err := SolveCameraPose(a.samples, a.cameraLimits)
+	if err != nil {
+		return fmt.Errorf("failed to solve for camera pose: %w", err)
+	}
+	a.cameraPose = cameraPose
+	// Store or use the cameraPose as needed
+	// For example, you might want to save it to a file or use it in subsequent calculations
+	return nil
+}
+
+func (a *AbsolutePositionTracker) CalculatePTZ(targetPose r3.Vector, cameraPose spatialmath.Pose) (utils.PTZValues, error) {
+	ptzResult := XYZToPanTilt(targetPose, a.cameraPose)
+	if !ptzResult.IsValid {
+		return utils.PTZValues{}, fmt.Errorf("invalid PTZ result: %s", ptzResult.ErrorMessage)
+	}
+	zoom := utils.CalculateZoom(targetPose, cameraPose.Point(), a.cameraLimits)
+	ptzValues := utils.PTZValues{
+		Pan:  ptzResult.PanNormalized,
+		Tilt: ptzResult.TiltNormalized,
+		Zoom: zoom,
+	}
+	return ptzValues, nil
+}
+
+func (a *AbsolutePositionTracker) GetCalibration() (cameraPose spatialmath.Pose, err error) {
+	if a.cameraPose == nil {
+		return nil, fmt.Errorf("camera pose not yet calibrated")
+	}
+	return a.cameraPose.Pose, nil
 }
