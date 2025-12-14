@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/spatialmath"
 )
 
 // ValidateMeasurements checks quality of measurements
@@ -61,7 +62,7 @@ func ValidateMeasurements(measurements []PTZMeasurement) {
 }
 
 // TestCalibration validates solved pose
-func ValidateCalibration(measurements []PTZMeasurement, cameraPose *CameraPose, XYZToPanTilt func(targetPosition r3.Vector, camera *CameraPose) PanTiltResult) {
+func ValidateCalibration(measurements []PTZMeasurement, cameraPose spatialmath.Pose, cameraLimits CameraLimits, XYZToPanTilt func(targetPosition r3.Vector, camera spatialmath.Pose, cameraLimits CameraLimits) PanTiltResult) {
 	fmt.Println("\nCalibration Validation:")
 	fmt.Println("Point | Pan Error (°) | Tilt Error (°) | Status")
 	fmt.Println("------|---------------|----------------|--------")
@@ -70,10 +71,10 @@ func ValidateCalibration(measurements []PTZMeasurement, cameraPose *CameraPose, 
 	validCount := 0
 
 	for i, m := range measurements {
-		result := XYZToPanTilt(m.TargetPosition, cameraPose)
+		result := XYZToPanTilt(m.TargetPosition, cameraPose, cameraLimits)
 
-		panOrigDeg := NormalizedToDegrees(m.Pan, cameraPose.Limits.PanMinDeg, cameraPose.Limits.PanMaxDeg)
-		tiltOrigDeg := NormalizedToDegrees(m.Tilt, cameraPose.Limits.TiltMinDeg, cameraPose.Limits.TiltMaxDeg)
+		panOrigDeg := NormalizedToDegrees(m.Pan, cameraLimits.PanMinDeg, cameraLimits.PanMaxDeg)
+		tiltOrigDeg := NormalizedToDegrees(m.Tilt, cameraLimits.TiltMinDeg, cameraLimits.TiltMaxDeg)
 
 		panErr := result.PanDegrees - panOrigDeg
 		tiltErr := result.TiltDegrees - tiltOrigDeg

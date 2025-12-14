@@ -53,10 +53,26 @@ type PanTiltResult struct {
 	ErrorMessage   string
 }
 
-// CameraPose represents the solved camera position and orientation using Viam's Pose
-type CameraPose struct {
-	Pose   spatialmath.Pose
-	Limits CameraLimits
+// Helper to convert spatialmath.Pose to a user-friendly map
+func PoseToMap(pose spatialmath.Pose) map[string]interface{} {
+	if pose == nil {
+		return nil
+	}
+	pos := pose.Point()
+	ori := pose.Orientation().Quaternion()
+	return map[string]interface{}{
+		"translation": map[string]float64{
+			"x": pos.X,
+			"y": pos.Y,
+			"z": pos.Z,
+		},
+		"orientation": map[string]float64{
+			"Imag": ori.Imag,
+			"Jmag": ori.Jmag,
+			"Kmag": ori.Kmag,
+			"Real": ori.Real,
+		},
+	}
 }
 
 func ClampPTZValues(ptzValues PTZValues, limits CameraLimits) PTZValues {
@@ -69,13 +85,7 @@ func ClampPTZValues(ptzValues PTZValues, limits CameraLimits) PTZValues {
 
 // Clamp clamps a value between min and max
 func Clamp(value, min, max float64) float64 {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
+	return math.Max(min, math.Min(max, value))
 }
 
 // Helper functions for coordinate conversions
@@ -106,37 +116,34 @@ func NormalizedToRadians(normalized float64, minDeg, maxDeg float64) float64 {
 	return DegreesToRadians(degrees)
 }
 
-// PanTiltToDirection converts pan/tilt angles (in radians) to unit direction vector
-// Coordinate system: +X=Right, +Y=Down, +Z=Forward (standard camera/CV convention)
-// Positive pan rotates camera right (toward +X in camera frame)
-// Positive tilt rotates camera up (toward -Y in camera frame, for upward-facing camera)
-func PanTiltToDirection(panRad, tiltRad float64) r3.Vector {
-	x := math.Cos(tiltRad) * math.Sin(panRad) // Positive because +pan = camera right = +X
-	y := -math.Sin(tiltRad)                   // Negative because +tilt = up = -Y (upward-facing camera)
-	z := math.Cos(tiltRad) * math.Cos(panRad) // Forward is +Z
-	return r3.Vector{X: x, Y: y, Z: z}
+func CalculatePanTiltInCameraFrame(targetPositionInCameraFrame r3.Vector) (panRad, tiltRad float64) {
+	x, y, z := targetPositionInCameraFrame.X, targetPositionInCameraFrame.Y, targetPositionInCameraFrame.Z
+
+	// Pan: atan2(x, z)
+	panRad = math.Atan2(x, z)
+
+	// Tilt: atan2(-y, sqrt(x^2 + z^2))
+	rXZ := math.Sqrt(x*x + z*z)
+	tiltRad = math.Atan2(-y, rXZ) // Negative because +tilt = up = -Y (upward-facing camera)
+
+	return panRad, tiltRad
 }
 
-// TransformPointToCameraFrame transforms a world point to camera frame
-// This applies the inverse transformation: R^T * (point - t)
+// TransformPointToCameraFrame using Viam's Pose API
 func TransformPointToCameraFrame(cameraPose spatialmath.Pose, worldPoint r3.Vector) r3.Vector {
-	// Subtract translation: (point - t)
-	translation := cameraPose.Point()
-	diff := r3.Vector{
-		X: worldPoint.X - translation.X,
-		Y: worldPoint.Y - translation.Y,
-		Z: worldPoint.Z - translation.Z,
-	}
+	// Create a "pose" for the point (position only, no rotation)
+	pointPose := spatialmath.NewPose(worldPoint, &spatialmath.OrientationVector{
+		Theta: 0, OX: 0, OY: 0, OZ: 1,
+	})
 
-	// Apply inverse rotation: R^T * diff
-	// For rotation matrices, transpose = inverse
-	rotMat := cameraPose.Orientation().RotationMatrix()
+	// Compose: camera_inverse * point transforms point to camera frame
+	// This uses Viam's internal pose math
+	cameraPoseInverse := spatialmath.PoseInverse(cameraPose)
+	resultPose := spatialmath.Compose(cameraPoseInverse, pointPose)
 
-	return r3.Vector{
-		X: rotMat.At(0, 0)*diff.X + rotMat.At(1, 0)*diff.Y + rotMat.At(2, 0)*diff.Z,
-		Y: rotMat.At(0, 1)*diff.X + rotMat.At(1, 1)*diff.Y + rotMat.At(2, 1)*diff.Z,
-		Z: rotMat.At(0, 2)*diff.X + rotMat.At(1, 2)*diff.Y + rotMat.At(2, 2)*diff.Z,
-	}
+	// Extract the position from result
+	result := resultPose.Point()
+	return result
 }
 
 func CalculateZoom(targetPos r3.Vector, cameraPos r3.Vector, cameraLimits CameraLimits) float64 {

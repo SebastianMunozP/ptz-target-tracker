@@ -48,9 +48,9 @@ type Config struct {
 	MaxZoomDistanceMM   float64  `json:"max_zoom_distance_mm"`
 	Deadzone            *float64 `json:"deadzone,omitempty"`
 
-	TrackingMethod                    string                          `json:"tracking_method"` // "absolute_position" or "polynomial"
-	PolynomialMethodCalibration       *trackers.PolynomialCalibration `json:"polynomial_method_calibration,omitempty"`
-	AbsolutePositionMethodCalibration *spatialmath.Pose               `json:"absolute_position_method_calibration,omitempty"` // Only for absolute position
+	TrackingMethod                    string                                `json:"tracking_method"` // "absolute_position" or "polynomial"
+	PolynomialMethodCalibration       *trackers.PolynomialCalibration       `json:"polynomial_method_calibration,omitempty"`
+	AbsolutePositionMethodCalibration *trackers.AbsolutePositionCalibration `json:"absolute_position_method_calibration,omitempty"` // Only for absolute position
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -101,8 +101,8 @@ func (cfg *Config) Validate(path string) ([]string, []string, error) {
 	}
 
 	// Tracking method validation
-	if cfg.TrackingMethod != "absolute_position" && cfg.TrackingMethod != "polynomial" {
-		return nil, nil, errors.New("tracking_method must be either 'absolute_position' or 'polynomial'")
+	if cfg.TrackingMethod != "absolute-position" && cfg.TrackingMethod != "polynomial" {
+		return nil, nil, errors.New("tracking_method must be either 'absolute-sposition' or 'polynomial'")
 	}
 	if cfg.PolynomialMethodCalibration != nil {
 		if len(cfg.PolynomialMethodCalibration.PanPolyCoeffs) != 10 {
@@ -219,10 +219,20 @@ func NewComponentTracker(ctx context.Context, deps resource.Dependencies, name r
 	}
 
 	// Copy calibration if provided
-	s.logger.Debugf("Creating component tracker with config: %+v", conf)
+	s.logger.Infof("Creating component tracker with config: %+v", conf)
 	s.cfg.PolynomialMethodCalibration = conf.PolynomialMethodCalibration
 	s.cfg.AbsolutePositionMethodCalibration = conf.AbsolutePositionMethodCalibration
-
+	if s.cfg.AbsolutePositionMethodCalibration != nil && s.cfg.TrackingMethod == "absolute-position" {
+		s.tracker, err = trackers.NewAbsolutePositionTrackerWithCalibration(logger, s.cameraLimits, s.cfg.AbsolutePositionMethodCalibration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create absolute position tracker: %w", err)
+		}
+	} else if s.cfg.PolynomialMethodCalibration != nil && s.cfg.TrackingMethod == "polynomial" {
+		s.tracker, err = trackers.NewPolynomialTrackerWithCalibration(logger, s.cameraLimits, s.cfg.PolynomialMethodCalibration)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create polynomial tracker: %w", err)
+		}
+	}
 	if conf.EnableOnStart {
 		s.logger.Info("Starting PTZ component tracker on start")
 		s.worker.Add(s.trackingLoop)
@@ -265,27 +275,27 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 				return nil, fmt.Errorf("sample %d is not a map", i)
 			}
 
-			// Parse TargetPos
-			targetPosRaw, ok := sampleMap["TargetPos"]
+			// Parse TargetPosition
+			targetPosRaw, ok := sampleMap["TargetPosition"]
 			if !ok {
-				return nil, fmt.Errorf("sample %d missing TargetPos", i)
+				return nil, fmt.Errorf("sample %d missing TargetPosition", i)
 			}
 			targetPosMap, ok := targetPosRaw.(map[string]interface{})
 			if !ok {
-				return nil, fmt.Errorf("sample %d TargetPos is not a map", i)
+				return nil, fmt.Errorf("sample %d TargetPosition is not a map", i)
 			}
 
 			targetX, ok := targetPosMap["X"].(float64)
 			if !ok {
-				return nil, fmt.Errorf("sample %d TargetPos.X is not a float64", i)
+				return nil, fmt.Errorf("sample %d TargetPosition.X is not a float64", i)
 			}
 			targetY, ok := targetPosMap["Y"].(float64)
 			if !ok {
-				return nil, fmt.Errorf("sample %d TargetPos.Y is not a float64", i)
+				return nil, fmt.Errorf("sample %d TargetPosition.Y is not a float64", i)
 			}
 			targetZ, ok := targetPosMap["Z"].(float64)
 			if !ok {
-				return nil, fmt.Errorf("sample %d TargetPos.Z is not a float64", i)
+				return nil, fmt.Errorf("sample %d TargetPosition.Z is not a float64", i)
 			}
 
 			// Parse Pan
@@ -382,7 +392,8 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			if len(t.samples) < trackers.AbsolutePositionTrackerMinSamples {
 				return nil, fmt.Errorf("need at least %d samples for absolute position fit, have %d", trackers.AbsolutePositionTrackerMinSamples, len(t.samples))
 			}
-			t.tracker, err = trackers.NewAbsolutePositionTracker(t.logger, t.cameraLimits)
+			cameraPose, err := t.getPose(ctx, t.cfg.PTZCameraName)
+			t.tracker, err = trackers.NewAbsolutePositionTracker(t.logger, t.cameraLimits, cameraPose.Pose())
 			if err != nil {
 				return nil, err
 			}
@@ -428,7 +439,7 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 			return map[string]interface{}{
 				"status":       "success",
 				"samples_used": len(t.samples),
-				"camera_pose":  absolutePositionCalibration,
+				"camera_pose":  utils.PoseToMap(absolutePositionCalibration),
 			}, nil
 		}
 		// If we get here, it means the tracker is not a polynomial or absolute position tracker

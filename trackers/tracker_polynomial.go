@@ -117,6 +117,7 @@ func calculatePanTiltPolynomial(pos r3.Vector, calibration PolynomialCalibration
 	if len(features) != len(calibration.PanPolyCoeffs) {
 		return 0, 0, fmt.Errorf("Feature length mismatch: features=%d, pan_coeffs=%d", len(features), len(calibration.PanPolyCoeffs))
 	}
+
 	for i := range features {
 		pan += calibration.PanPolyCoeffs[i] * features[i]
 		tilt += calibration.TiltPolyCoeffs[i] * features[i]
@@ -127,7 +128,7 @@ func calculatePanTiltPolynomial(pos r3.Vector, calibration PolynomialCalibration
 type PolynomialTracker struct {
 	logger       logging.Logger
 	cameraLimits utils.CameraLimits
-	cameraPose   utils.CameraPose
+	cameraPose   spatialmath.Pose
 	calibration  PolynomialCalibration
 }
 
@@ -137,6 +138,14 @@ func NewPolynomialTracker(logger logging.Logger, cameraLimits utils.CameraLimits
 	return &PolynomialTracker{
 		logger:       logger,
 		cameraLimits: cameraLimits,
+	}, nil
+}
+
+func NewPolynomialTrackerWithCalibration(logger logging.Logger, cameraLimits utils.CameraLimits, calibration *PolynomialCalibration) (*PolynomialTracker, error) {
+	return &PolynomialTracker{
+		logger:       logger,
+		cameraLimits: cameraLimits,
+		calibration:  *calibration,
 	}, nil
 }
 
@@ -161,7 +170,9 @@ func (a *PolynomialTracker) CalculatePTZ(targetPose r3.Vector, cameraPose spatia
 		Tilt: tilt,
 		Zoom: zoom,
 	}
+	a.logger.Debug(fmt.Sprintf("Calculated PTZ: Pan=%.3f, Tilt=%.3f, Zoom=%.3f", pan, tilt, zoom))
 	ptzValues = utils.ClampPTZValues(ptzValues, a.cameraLimits)
+	a.logger.Debug(fmt.Sprintf("Clamped PTZ: Pan=%.3f, Tilt=%.3f, Zoom=%.3f", ptzValues.Pan, ptzValues.Tilt, ptzValues.Zoom))
 	return ptzValues, nil
 }
 

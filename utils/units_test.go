@@ -207,3 +207,31 @@ func TestTransformPointToCameraFrame(t *testing.T) {
 		t.Errorf("Transform to camera frame failed for point above: got %+v, want %+v", camPoint, expectedCamPoint)
 	}
 }
+
+func TestTransformPointToCameraFrameCameraNotAtOrigin(t *testing.T) {
+	// Define a camera pose at (1000, 1000, 0), looking along +Z, with no rotation
+	// The location of the camera is in world coordinates
+	traslation := r3.Vector{X: 1000, Y: 1000, Z: 0}
+	orientation := &spatialmath.OrientationVector{
+		Theta: 0,
+		OX:    0,
+		OY:    0,
+		OZ:    1,
+	}
+	cameraPose := spatialmath.NewPose(traslation, orientation)
+
+	// Test point located at origin in world coordinates
+	targetPoint := r3.Vector{X: 0, Y: 0, Z: 00}
+	expectedCamPoint := r3.Vector{X: -1000, Y: -1000, Z: 0}
+
+	camPoint := TransformPointToCameraFrame(cameraPose, targetPoint)
+	if !vectorsAlmostEqual(camPoint, expectedCamPoint, 1e-6) {
+		t.Errorf("Transform to camera frame failed for point in front: got %+v, want %+v", camPoint, expectedCamPoint)
+	}
+
+	// Test point located above the camera in world coordinates
+	// At viam +Z is up
+	targetPoint = r3.Vector{X: 1000, Y: 1000, Z: 1000}
+	// For the camera, -Y is up
+	expectedCamPoint = r3.Vector{X: 0, Y: -1000, Z: 0}
+}
