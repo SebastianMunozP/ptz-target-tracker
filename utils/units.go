@@ -130,7 +130,7 @@ func CalculatePanTiltInCameraFrame(targetPositionInCameraFrame r3.Vector) (panRa
 }
 
 // TransformPointToCameraFrame using Viam's Pose API
-func TransformPointToCameraFrame(cameraPose spatialmath.Pose, worldPoint r3.Vector) r3.Vector {
+func TransformPointToCameraFrame(cameraPose spatialmath.Pose, worldPoint r3.Vector) spatialmath.Pose {
 	// Create a "pose" for the point (position only, no rotation)
 	pointPose := spatialmath.NewPose(worldPoint, &spatialmath.OrientationVector{
 		Theta: 0, OX: 0, OY: 0, OZ: 1,
@@ -141,9 +141,7 @@ func TransformPointToCameraFrame(cameraPose spatialmath.Pose, worldPoint r3.Vect
 	cameraPoseInverse := spatialmath.PoseInverse(cameraPose)
 	resultPose := spatialmath.Compose(cameraPoseInverse, pointPose)
 
-	// Extract the position from result
-	result := resultPose.Point()
-	return result
+	return resultPose
 }
 
 func CalculateZoom(targetPos r3.Vector, cameraPos r3.Vector, cameraLimits CameraLimits) float64 {

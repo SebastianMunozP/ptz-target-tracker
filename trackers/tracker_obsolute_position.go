@@ -54,7 +54,8 @@ func (r *StandardCameraFrameResiduals) Residuals(params []float64) []float64 {
 
 	for _, meas := range r.Measurements {
 		worldPoint := meas.TargetPosition
-		camPoint := utils.TransformPointToCameraFrame(pose, worldPoint)
+		camPose := utils.TransformPointToCameraFrame(pose, worldPoint)
+		camPoint := camPose.Point()
 		cx, cy, cz := camPoint.X, camPoint.Y, camPoint.Z
 
 		if cz <= 0 {
@@ -264,7 +265,8 @@ func XYZToPanTiltStandard(targetPosition r3.Vector, cameraPose spatialmath.Pose,
 	cameraLimits utils.CameraLimits) utils.PanTiltResult {
 
 	// Transform to camera frame
-	camPoint := utils.TransformPointToCameraFrame(cameraPose, targetPosition)
+	camPose := utils.TransformPointToCameraFrame(cameraPose, targetPosition)
+	camPoint := camPose.Point()
 
 	// Check if behind camera
 	if camPoint.Z <= 0 {

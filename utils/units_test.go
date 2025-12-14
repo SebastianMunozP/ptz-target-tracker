@@ -96,27 +96,30 @@ func TestTransformPointToCameraFrame(t *testing.T) {
 	targetPoint := r3.Vector{X: 0, Y: 0, Z: 10}
 	expectedCamPoint := r3.Vector{X: 0, Y: 0, Z: 10}
 
-	camPoint := TransformPointToCameraFrame(cameraPose, targetPoint)
-	if !vectorsAlmostEqual(camPoint, expectedCamPoint, 1e-6) {
-		t.Errorf("Transform to camera frame failed for point in front: got %+v, want %+v", camPoint, expectedCamPoint)
+	camPose := TransformPointToCameraFrame(cameraPose, targetPoint)
+	camLocation := camPose.Point()
+	if !vectorsAlmostEqual(camLocation, expectedCamPoint, 1e-6) {
+		t.Errorf("Transform to camera frame failed for point in front: got %+v, want %+v", camLocation, expectedCamPoint)
 	}
 
 	// Test point to the right of camera
 	targetPoint = r3.Vector{X: 10, Y: 0, Z: 0}
 	expectedCamPoint = r3.Vector{X: 10, Y: 0, Z: 0}
 
-	camPoint = TransformPointToCameraFrame(cameraPose, targetPoint)
-	if !vectorsAlmostEqual(camPoint, expectedCamPoint, 1e-6) {
-		t.Errorf("Transform to camera frame failed for point to the right: got %+v, want %+v", camPoint, expectedCamPoint)
+	camPose = TransformPointToCameraFrame(cameraPose, targetPoint)
+	camLocation = camPose.Point()
+	if !vectorsAlmostEqual(camLocation, expectedCamPoint, 1e-6) {
+		t.Errorf("Transform to camera frame failed for point to the right: got %+v, want %+v", camLocation, expectedCamPoint)
 	}
 
 	// Test point above the camera
 	targetPoint = r3.Vector{X: 0, Y: 10, Z: 0}
 	expectedCamPoint = r3.Vector{X: 0, Y: 10, Z: 0}
 
-	camPoint = TransformPointToCameraFrame(cameraPose, targetPoint)
-	if !vectorsAlmostEqual(camPoint, expectedCamPoint, 1e-6) {
-		t.Errorf("Transform to camera frame failed for point above: got %+v, want %+v", camPoint, expectedCamPoint)
+	camPose = TransformPointToCameraFrame(cameraPose, targetPoint)
+	camLocation = camPose.Point()
+	if !vectorsAlmostEqual(camLocation, expectedCamPoint, 1e-6) {
+		t.Errorf("Transform to camera frame failed for point above: got %+v, want %+v", camLocation, expectedCamPoint)
 	}
 }
 
@@ -133,17 +136,33 @@ func TestTransformPointToCameraFrameCameraNotAtOrigin(t *testing.T) {
 	cameraPose := spatialmath.NewPose(traslation, orientation)
 
 	// Test point located at origin in world coordinates
-	targetPoint := r3.Vector{X: 0, Y: 0, Z: 00}
+	targetPoint := r3.Vector{X: 0, Y: 0, Z: 0}
 	expectedCamPoint := r3.Vector{X: -1000, Y: -1000, Z: 0}
 
-	camPoint := TransformPointToCameraFrame(cameraPose, targetPoint)
-	if !vectorsAlmostEqual(camPoint, expectedCamPoint, 1e-6) {
-		t.Errorf("Transform to camera frame failed for point in front: got %+v, want %+v", camPoint, expectedCamPoint)
+	camPose := TransformPointToCameraFrame(cameraPose, targetPoint)
+	camLocation := camPose.Point()
+	camOrientation := camPose.Orientation().OrientationVectorDegrees()
+	if !vectorsAlmostEqual(camLocation, expectedCamPoint, 1e-6) {
+		t.Errorf("Transform to camera frame failed for point in front: got %+v, want %+v", camLocation, expectedCamPoint)
+	}
+	if orientation.Theta != camOrientation.Theta || orientation.OX != camOrientation.OX ||
+		orientation.OY != camOrientation.OY || orientation.OZ != camOrientation.OZ {
+		t.Errorf("Camera orientation changed unexpectedly: got %+v, want %+v", orientation, camOrientation)
 	}
 
 	// Test point located above the camera in world coordinates
 	// At viam +Z is up
 	targetPoint = r3.Vector{X: 1000, Y: 1000, Z: 1000}
 	// For the camera, -Y is up
-	expectedCamPoint = r3.Vector{X: 0, Y: -1000, Z: 0}
+	expectedCamPoint = r3.Vector{X: 0, Y: 0, Z: 1000}
+
+	camPose = TransformPointToCameraFrame(cameraPose, targetPoint)
+	camLocation = camPose.Point()
+	if !vectorsAlmostEqual(camLocation, expectedCamPoint, 1e-6) {
+		t.Errorf("Transform to camera frame failed for point above: got %+v, want %+v", camLocation, expectedCamPoint)
+	}
+	if orientation.Theta != camOrientation.Theta || orientation.OX != camOrientation.OX ||
+		orientation.OY != camOrientation.OY || orientation.OZ != camOrientation.OZ {
+		t.Errorf("Camera orientation changed unexpectedly: got %+v, want %+v", orientation, camOrientation)
+	}
 }
