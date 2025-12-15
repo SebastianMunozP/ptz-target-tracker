@@ -76,17 +76,29 @@ func ValidateCalibration(measurements []PTZMeasurement, cameraPose spatialmath.P
 		panOrigDeg := NormalizedToDegrees(m.Pan, cameraLimits.PanMinDeg, cameraLimits.PanMaxDeg)
 		tiltOrigDeg := NormalizedToDegrees(m.Tilt, cameraLimits.TiltMinDeg, cameraLimits.TiltMaxDeg)
 
+		// Normalize pan error to [-180, 180] to handle wrapping
+		if cameraLimits.PanMinDeg >= 0 {
+			// Limits are in [0, 360) style (e.g., [0, 355])
+			// Normalize predicted angle to [0, 360)
+			for panOrigDeg < 0 {
+				panOrigDeg += 360
+			}
+			for panOrigDeg >= 360 {
+				panOrigDeg -= 360
+			}
+		} else {
+			// Limits are in [-180, 180) style (e.g., [-180, 180])
+			// Normalize predicted angle to [-180, 180)
+			for panOrigDeg < -180 {
+				panOrigDeg += 360
+			}
+			for panOrigDeg >= 180 {
+				panOrigDeg -= 360
+			}
+		}
+
 		panErr := result.PanDegrees - panOrigDeg
 		tiltErr := result.TiltDegrees - tiltOrigDeg
-
-		// Normalize pan error to [-180, 180] to handle wrapping
-		for panErr > 180 {
-			panErr -= 360
-		}
-		for panErr < -180 {
-			panErr += 360
-		}
-
 		status := "✓"
 		if result.IsValid {
 			totalPanErr += math.Abs(panErr)

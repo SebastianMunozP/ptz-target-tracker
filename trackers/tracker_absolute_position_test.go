@@ -6,7 +6,128 @@ import (
 	"testing"
 
 	"github.com/golang/geo/r3"
+	"go.viam.com/rdk/spatialmath"
 )
+
+func TestEndToEndSyntheticData1(t *testing.T) {
+	// STEP 1: Define TRUE camera pose in world frame
+	trueCameraPos := r3.Vector{X: 0.0, Y: 0.0, Z: 0.0}
+
+	// Camera looks down +Y axis in world frame
+	// This means: world +Y → camera +Z (forward)
+	// This is a 90° rotation around X-axis
+	trueCameraOrientation := &spatialmath.Quaternion{
+		Real: math.Cos(math.Pi / 4), // 90° / 2
+		Imag: math.Sin(math.Pi / 4), // Around X-axis
+		Jmag: 0,
+		Kmag: 0,
+	}
+	trueCameraPose := spatialmath.NewPose(trueCameraPos, trueCameraOrientation)
+
+	limits := utils.CameraLimits{
+		PanMinDeg:  0.0,
+		PanMaxDeg:  360.0,
+		TiltMinDeg: -90.0,
+		TiltMaxDeg: 90.0,
+	}
+
+	// STEP 2: Generate synthetic measurements
+	var measurements []utils.PTZMeasurement
+	numPoints := 8
+	radius := 1000.0
+
+	for i := range numPoints {
+		// Create target positions in world frame
+		// Semicircle in XY plane (where camera is looking)
+		angle := -math.Pi + (float64(i)/float64(numPoints-1))*(2*math.Pi)
+
+		worldX := radius * math.Sin(angle)
+		worldY := radius * math.Cos(angle) // Along camera's view direction
+		worldZ := 0.0
+
+		worldPos := r3.Vector{X: worldX, Y: worldY, Z: worldZ}
+
+		// STEP 3: Transform to camera frame using TRUE pose
+		camPos := utils.TransformPointToCameraFrame(trueCameraPose, worldPos)
+		cx, cy, cz := camPos.Point().X, camPos.Point().Y, camPos.Point().Z
+
+		t.Logf("World pos: (%.1f, %.1f, %.1f) → Camera frame: (%.1f, %.1f, %.1f)",
+			worldX, worldY, worldZ, cx, cy, cz)
+
+		// STEP 4: Compute pan/tilt using STANDARD formulas
+		panRad := math.Atan2(cx, cz)
+		rXZ := math.Sqrt(cx*cx + cz*cz)
+		tiltRad := math.Atan2(-cy, rXZ)
+
+		panDeg := panRad * 180 / math.Pi
+		if panDeg < -180 {
+			panDeg += 360
+		} else if panDeg > 180 {
+			panDeg -= 360
+		}
+		tiltDeg := tiltRad * 180 / math.Pi
+
+		t.Logf("  → Pan: %.2f°, Tilt: %.2f°", panDeg, tiltDeg)
+
+		// Store measurement
+		measurement := utils.PTZMeasurement{
+			Pan:            utils.DegreesToNormalized(panDeg, limits.PanMinDeg, limits.PanMaxDeg),
+			Tilt:           utils.DegreesToNormalized(tiltDeg, limits.TiltMinDeg, limits.TiltMaxDeg),
+			TargetPosition: worldPos,
+		}
+		measurements = append(measurements, measurement)
+	}
+	// Auto-discover best formulas
+	pose, formulas, err := AutoDiscoverBestFormulas(measurements, limits, trueCameraPos)
+	if err != nil {
+		t.Fatalf("Failed to discover formulas: %v", err)
+	}
+
+	// Create calibration object
+	calibration := CameraCalibration{
+		Pose:     pose,
+		Formulas: formulas,
+	}
+
+	// Validate
+	for i, meas := range measurements {
+		result := XYZToPanTiltWithFormulas(meas.TargetPosition, calibration, limits)
+
+		origPanDeg := utils.NormalizedToDegrees(meas.Pan, limits.PanMinDeg, limits.PanMaxDeg)
+		origTiltDeg := utils.NormalizedToDegrees(meas.Tilt, limits.TiltMinDeg, limits.TiltMaxDeg)
+		if limits.PanMinDeg >= 0 {
+			// Limits are in [0, 360) style (e.g., [0, 355])
+			// Normalize predicted angle to [0, 360)
+			for origPanDeg < 0 {
+				origPanDeg += 360
+			}
+			for origPanDeg >= 360 {
+				origPanDeg -= 360
+			}
+		} else {
+			// Limits are in [-180, 180) style (e.g., [-180, 180])
+			// Normalize predicted angle to [-180, 180)
+			for origPanDeg < -180 {
+				origPanDeg += 360
+			}
+			for origPanDeg >= 180 {
+				origPanDeg -= 360
+			}
+		}
+
+		panErr := math.Abs(result.PanDegrees - origPanDeg)
+		tiltErr := math.Abs(result.TiltDegrees - origTiltDeg)
+
+		t.Logf("Point %d: Pan error: %.4f°, Tilt error: %.4f°", i, panErr, tiltErr)
+	}
+
+}
+
+func vectorsAlmostEqual(v1, v2 r3.Vector, tol float64) bool {
+	return math.Abs(v1.X-v2.X) < tol &&
+		math.Abs(v1.Y-v2.Y) < tol &&
+		math.Abs(v1.Z-v2.Z) < tol
+}
 
 var realSamples = []utils.PTZMeasurement{
 	{
@@ -164,7 +285,7 @@ var realSamples = []utils.PTZMeasurement{
 	},
 }
 
-func TestEndToEnd2(t *testing.T) {
+func TestEndToEndRealData1(t *testing.T) {
 	approxCameraPos := r3.Vector{X: -550.0, Y: 2000.0, Z: -150.0}
 	limits := utils.CameraLimits{
 		PanMinDeg:  0.0,
@@ -173,45 +294,28 @@ func TestEndToEnd2(t *testing.T) {
 		TiltMaxDeg: 90.0,
 	}
 
-	t.Logf("PTZ Camera Calibration")
-	t.Logf("======================")
-	t.Logf("Camera: Pan=[%.0f°,%.0f°], Tilt=[%.0f°,%.0f°]\n\n",
-		limits.PanMinDeg, limits.PanMaxDeg, limits.TiltMinDeg, limits.TiltMaxDeg)
-
-	utils.ValidateMeasurements(realSamples)
-
-	t.Logf("\nSolving for camera pose...")
-	cameraPose, err := SolveCameraPoseStandard(realSamples, limits, approxCameraPos)
+	// Auto-discover best formulas
+	pose, formulas, err := AutoDiscoverBestFormulas(realSamples, limits, approxCameraPos)
 	if err != nil {
-		t.Errorf("Error: %v", err)
-		return
+		t.Fatalf("Failed to discover formulas: %v", err)
 	}
 
-	// Print pose information
-	point := cameraPose.Point()
-	orientation := cameraPose.Orientation()
+	// Create calibration object
+	calibration := CameraCalibration{
+		Pose:     pose,
+		Formulas: formulas,
+	}
 
-	// Try to get axis-angle representation
-	ov := orientation.AxisAngles()
-	t.Logf("\nCamera Pose:  Position: [%.3f, %.3f, %.3f], Orientation: [theta: %.3f rad (%.1f°), axis: [%.3f, %.3f, %.3f]]\n",
-		point.X, point.Y, point.Z, ov.Theta, ov.Theta*180/math.Pi, ov.RX, ov.RY, ov.RZ)
+	// Validate
+	for i, meas := range realSamples {
+		result := XYZToPanTiltWithFormulas(meas.TargetPosition, calibration, limits)
 
-	// You can also convert to other representations
-	quat := orientation.Quaternion()
-	t.Logf("  Orientation (quaternion): [%.3f, %.3f, %.3f, %.3f]\n",
-		quat.Real, quat.Imag, quat.Jmag, quat.Kmag)
+		origPanDeg := utils.NormalizedToDegrees(meas.Pan, limits.PanMinDeg, limits.PanMaxDeg)
+		origTiltDeg := utils.NormalizedToDegrees(meas.Tilt, limits.TiltMinDeg, limits.TiltMaxDeg)
 
-	utils.ValidateCalibration(realSamples, cameraPose, limits, XYZToPanTiltStandard)
+		panErr := math.Abs(result.PanDegrees - origPanDeg)
+		tiltErr := math.Abs(result.TiltDegrees - origTiltDeg)
 
-	// Example usage
-	t.Logf("\n\nExample: Track new target")
-	result := XYZToPanTiltStandard(r3.Vector{X: 100.0, Y: 200.0, Z: -50.0}, cameraPose, limits)
-	t.Logf("Target: [100.000, 200.000, -50.000]\n")
-	if result.IsValid {
-		t.Logf("✓ Pan: %.3f, Tilt: %.3f (normalized)\n",
-			result.PanNormalized, result.TiltNormalized)
-		t.Logf("  (%.1f°, %.1f°)\n", result.PanDegrees, result.TiltDegrees)
-	} else {
-		t.Logf("✗ %s\n", result.ErrorMessage)
+		t.Logf("Point %d: Pan error: %.4f°, Tilt error: %.4f°", i, panErr, tiltErr)
 	}
 }

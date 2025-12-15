@@ -116,6 +116,28 @@ func NormalizedToRadians(normalized float64, minDeg, maxDeg float64) float64 {
 	return DegreesToRadians(degrees)
 }
 
+func WrapUpAngleDeg(angle float64, minDegree, maxDegree float64) float64 {
+	if minDegree >= 0 {
+		// Limits are in [0, 360) style (e.g., [0, 355])
+		// Normalize predicted angle to [0, 360)
+		for angle < 0 {
+			angle += 360
+		}
+		for angle >= 360 {
+			angle -= 360
+		}
+	} else {
+		// Limits are in [-180, 180) style (e.g., [-180, 180])
+		// Normalize predicted angle to [-180, 180)
+		for angle < -180 {
+			angle += 360
+		}
+		for angle >= 180 {
+			angle -= 360
+		}
+	}
+	return angle
+}
 func CalculatePanTiltInCameraFrame(targetPositionInCameraFrame r3.Vector) (panRad, tiltRad float64) {
 	x, y, z := targetPositionInCameraFrame.X, targetPositionInCameraFrame.Y, targetPositionInCameraFrame.Z
 
