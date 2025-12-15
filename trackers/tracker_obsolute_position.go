@@ -13,11 +13,68 @@ import (
 
 // FormulaSet represents a specific pan/tilt formula combination
 type FormulaSet struct {
+	Names     FormulasNames
+	Functions FormulaFunctions
+}
+
+type FormulasNames struct {
 	Name        string
 	PanFormula  string
 	TiltFormula string
+}
+
+type FormulaFunctions struct {
 	ComputePan  func(cx, cy, cz float64) float64
 	ComputeTilt func(cx, cy, cz float64) float64
+}
+
+// CameraCalibration stores both pose and formulas
+type AbsolutePositionCameraCalibration struct {
+	Pose          spatialmath.Pose
+	FormulasNames FormulasNames
+}
+
+type CameraCalibration struct {
+	Pose     spatialmath.Pose
+	Formulas FormulaSet
+}
+
+// AbsolutePositionCalibration stores camera pose for JSON serialization
+type AbsolutePositionCalibration struct {
+	Translation struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+		Z float64 `json:"z"`
+	} `json:"translation"`
+	Orientation struct {
+		W float64 `json:"w"` // Real component
+		X float64 `json:"x"` // Imag
+		Y float64 `json:"y"` // Jmag
+		Z float64 `json:"z"` // Kmag
+	} `json:"orientation"`
+	FormulaSet struct {
+		Name        string `json:"name"`
+		PanFormula  string `json:"pan_formula"`
+		TiltFormula string `json:"tilt_formula"`
+	} `json:"formula_set"`
+}
+
+// ToPose converts calibration data to spatialmath.Pose
+func (c *AbsolutePositionCalibration) ToPose() spatialmath.Pose {
+	translation := r3.Vector{
+		X: c.Translation.X,
+		Y: c.Translation.Y,
+		Z: c.Translation.Z,
+	}
+
+	orientation := &spatialmath.Quaternion{
+		Real: c.Orientation.W,
+		Imag: c.Orientation.X,
+		Jmag: c.Orientation.Y,
+		Kmag: c.Orientation.Z,
+	}
+
+	return spatialmath.NewPose(translation, orientation)
 }
 
 // GetAllFormulaSets returns all reasonable formula combinations to try
@@ -25,113 +82,208 @@ func GetAllFormulaSets() []FormulaSet {
 	return []FormulaSet{
 		// Standard XZ-plane formulas (camera looking down +Z)
 		{
-			Name:        "Standard (XZ-plane, Y-up)",
-			PanFormula:  "atan2(cx, cz)",
-			TiltFormula: "atan2(-cy, sqrt(cx²+cz²))",
-			ComputePan: func(cx, cy, cz float64) float64 {
-				return math.Atan2(cx, cz)
+			Names: FormulasNames{
+				Name:        "Standard (XZ-plane, Y-up)",
+				PanFormula:  "atan2(cx, cz)",
+				TiltFormula: "atan2(-cy, sqrt(cx²+cz²))",
 			},
-			ComputeTilt: func(cx, cy, cz float64) float64 {
-				rXZ := math.Sqrt(cx*cx + cz*cz)
-				return math.Atan2(-cy, rXZ)
+			Functions: FormulaFunctions{
+				ComputePan: func(cx, cy, cz float64) float64 {
+					return math.Atan2(cx, cz)
+				},
+				ComputeTilt: func(cx, cy, cz float64) float64 {
+					rXZ := math.Sqrt(cx*cx + cz*cz)
+					return math.Atan2(-cy, rXZ)
+				},
 			},
 		},
 
 		// Angled mount (cy as depth axis)
 		{
-			Name:        "Angled mount (cy-depth)",
-			PanFormula:  "atan2(-cx, cy)",
-			TiltFormula: "atan2(-cy, cz)",
-			ComputePan: func(cx, cy, cz float64) float64 {
-				return math.Atan2(-cx, cy)
+			Names: FormulasNames{
+				Name:        "Angled mount (cy-depth)",
+				PanFormula:  "atan2(-cx, cy)",
+				TiltFormula: "atan2(-cy, cz)",
 			},
-			ComputeTilt: func(cx, cy, cz float64) float64 {
-				return math.Atan2(-cy, cz)
+			Functions: FormulaFunctions{
+				ComputePan: func(cx, cy, cz float64) float64 {
+					return math.Atan2(-cx, cy)
+				},
+				ComputeTilt: func(cx, cy, cz float64) float64 {
+					return math.Atan2(-cy, cz)
+				},
 			},
 		},
 
 		// Variant: positive cx, cy depth
 		{
-			Name:        "Variant (cx positive, cy-depth)",
-			PanFormula:  "atan2(cx, cy)",
-			TiltFormula: "atan2(-cy, cz)",
-			ComputePan: func(cx, cy, cz float64) float64 {
-				return math.Atan2(cx, cy)
+			Names: FormulasNames{
+				Name:        "Variant (cx positive, cy-depth)",
+				PanFormula:  "atan2(cx, cy)",
+				TiltFormula: "atan2(-cy, cz)",
 			},
-			ComputeTilt: func(cx, cy, cz float64) float64 {
-				return math.Atan2(-cy, cz)
+			Functions: FormulaFunctions{
+				ComputePan: func(cx, cy, cz float64) float64 {
+					return math.Atan2(cx, cy)
+				},
+				ComputeTilt: func(cx, cy, cz float64) float64 {
+					return math.Atan2(-cy, cz)
+				},
 			},
 		},
 
 		// XY-plane formulas
 		{
-			Name:        "XY-plane (cz-depth)",
-			PanFormula:  "atan2(cx, cy)",
-			TiltFormula: "atan2(-cz, sqrt(cx²+cy²))",
-			ComputePan: func(cx, cy, cz float64) float64 {
-				return math.Atan2(cx, cy)
+			Names: FormulasNames{
+				Name:        "XY-plane (cz-depth)",
+				PanFormula:  "atan2(cx, cy)",
+				TiltFormula: "atan2(-cz, sqrt(cx²+cy²))",
 			},
-			ComputeTilt: func(cx, cy, cz float64) float64 {
-				rXY := math.Sqrt(cx*cx + cy*cy)
-				return math.Atan2(-cz, rXY)
+			Functions: FormulaFunctions{
+				ComputePan: func(cx, cy, cz float64) float64 {
+					return math.Atan2(cx, cy)
+				},
+				ComputeTilt: func(cx, cy, cz float64) float64 {
+					rXY := math.Sqrt(cx*cx + cy*cy)
+					return math.Atan2(-cz, rXY)
+				},
 			},
 		},
 
 		// Negative X variants
 		{
-			Name:        "Negative X (XZ-plane)",
-			PanFormula:  "atan2(-cx, cz)",
-			TiltFormula: "atan2(-cy, sqrt(cx²+cz²))",
-			ComputePan: func(cx, cy, cz float64) float64 {
-				return math.Atan2(-cx, cz)
+			Names: FormulasNames{
+				Name:        "Negative X (XZ-plane)",
+				PanFormula:  "atan2(-cx, cz)",
+				TiltFormula: "atan2(-cy, sqrt(cx²+cz²))",
 			},
-			ComputeTilt: func(cx, cy, cz float64) float64 {
-				rXZ := math.Sqrt(cx*cx + cz*cz)
-				return math.Atan2(-cy, rXZ)
+			Functions: FormulaFunctions{
+				ComputePan: func(cx, cy, cz float64) float64 {
+					return math.Atan2(-cx, cz)
+				},
+				ComputeTilt: func(cx, cy, cz float64) float64 {
+					rXZ := math.Sqrt(cx*cx + cz*cz)
+					return math.Atan2(-cy, rXZ)
+				},
 			},
 		},
 
 		// Positive Y tilt
 		{
-			Name:        "Positive Y tilt (XZ-plane)",
-			PanFormula:  "atan2(cx, cz)",
-			TiltFormula: "atan2(cy, sqrt(cx²+cz²))",
-			ComputePan: func(cx, cy, cz float64) float64 {
-				return math.Atan2(cx, cz)
+			Names: FormulasNames{
+				Name:        "Positive Y tilt (XZ-plane)",
+				PanFormula:  "atan2(cx, cz)",
+				TiltFormula: "atan2(cy, sqrt(cx²+cz²))",
 			},
-			ComputeTilt: func(cx, cy, cz float64) float64 {
-				rXZ := math.Sqrt(cx*cx + cz*cz)
-				return math.Atan2(cy, rXZ)
+			Functions: FormulaFunctions{
+				ComputePan: func(cx, cy, cz float64) float64 {
+					return math.Atan2(cx, cz)
+				},
+				ComputeTilt: func(cx, cy, cz float64) float64 {
+					rXZ := math.Sqrt(cx*cx + cz*cz)
+					return math.Atan2(cy, rXZ)
+				},
 			},
 		},
 
 		// YZ-plane formulas
 		{
-			Name:        "YZ-plane (cx-depth)",
-			PanFormula:  "atan2(cy, cz)",
-			TiltFormula: "atan2(-cx, sqrt(cy²+cz²))",
-			ComputePan: func(cx, cy, cz float64) float64 {
-				return math.Atan2(cy, cz)
+			Names: FormulasNames{
+				Name:        "YZ-plane (cx-depth)",
+				PanFormula:  "atan2(cy, cz)",
+				TiltFormula: "atan2(-cx, sqrt(cy²+cz²))",
 			},
-			ComputeTilt: func(cx, cy, cz float64) float64 {
-				rYZ := math.Sqrt(cy*cy + cz*cz)
-				return math.Atan2(-cx, rYZ)
+			Functions: FormulaFunctions{
+				ComputePan: func(cx, cy, cz float64) float64 {
+					return math.Atan2(cy, cz)
+				},
+				ComputeTilt: func(cx, cy, cz float64) float64 {
+					rYZ := math.Sqrt(cy*cy + cz*cz)
+					return math.Atan2(-cx, rYZ)
+				},
 			},
 		},
 
 		// Additional combinations with different sign patterns
 		{
-			Name:        "Variant 2 (neg X, cy-depth, pos tilt)",
-			PanFormula:  "atan2(-cx, cy)",
-			TiltFormula: "atan2(cy, cz)",
-			ComputePan: func(cx, cy, cz float64) float64 {
-				return math.Atan2(-cx, cy)
+			Names: FormulasNames{
+				Name:        "Variant 2 (neg X, cy-depth, pos tilt)",
+				PanFormula:  "atan2(-cx, cy)",
+				TiltFormula: "atan2(cy, cz)",
 			},
-			ComputeTilt: func(cx, cy, cz float64) float64 {
-				return math.Atan2(cy, cz)
+			Functions: FormulaFunctions{
+				ComputePan: func(cx, cy, cz float64) float64 {
+					return math.Atan2(-cx, cy)
+				},
+				ComputeTilt: func(cx, cy, cz float64) float64 {
+					return math.Atan2(cy, cz)
+				},
 			},
 		},
 	}
+}
+
+// formulaRegistry maps stable names to FormulaSet for rehydration after serialization
+var formulaRegistry map[string]FormulaSet
+
+func init() {
+	formulaRegistry = make(map[string]FormulaSet)
+	for _, fs := range GetAllFormulaSets() {
+		// use the display Name as key
+		formulaRegistry[fs.Names.Name] = fs
+	}
+}
+
+// FindFormulaSetByName returns a registered FormulaSet by name
+func FindFormulaSetByName(name string) (FormulaSet, bool) {
+	fs, ok := formulaRegistry[name]
+	return fs, ok
+}
+
+// FindFormulaSetByFormulas attempts to find a FormulaSet matching pan/tilt formula strings
+func FindFormulaSetByFormulas(panFormula, tiltFormula string) (FormulaSet, bool) {
+	for _, fs := range GetAllFormulaSets() {
+		if fs.Names.PanFormula == panFormula && fs.Names.TiltFormula == tiltFormula {
+			return fs, true
+		}
+	}
+	return FormulaSet{}, false
+}
+
+// CameraCalibrationToAbsolute converts an internal CameraCalibration to a serializable AbsolutePositionCalibration
+func CameraCalibrationToAbsolute(c CameraCalibration) AbsolutePositionCalibration {
+	var out AbsolutePositionCalibration
+	pt := c.Pose.Point()
+	out.Translation.X = pt.X
+	out.Translation.Y = pt.Y
+	out.Translation.Z = pt.Z
+	q := c.Pose.Orientation().Quaternion()
+	out.Orientation.W = q.Real
+	out.Orientation.X = q.Imag
+	out.Orientation.Y = q.Jmag
+	out.Orientation.Z = q.Kmag
+	out.FormulaSet.Name = c.Formulas.Names.Name
+	out.FormulaSet.PanFormula = c.Formulas.Names.PanFormula
+	out.FormulaSet.TiltFormula = c.Formulas.Names.TiltFormula
+	return out
+}
+
+// AbsoluteToCameraCalibration converts a serialized AbsolutePositionCalibration back to a CameraCalibration
+// by rehydrating the FormulaSet functions from the registry.
+func AbsoluteToCameraCalibration(abs *AbsolutePositionCalibration) (CameraCalibration, error) {
+	if abs == nil {
+		return CameraCalibration{}, fmt.Errorf("nil AbsolutePositionCalibration")
+	}
+	pose := abs.ToPose()
+	// Try lookup by name first
+	if fs, ok := FindFormulaSetByName(abs.FormulaSet.Name); ok {
+		return CameraCalibration{Pose: pose, Formulas: fs}, nil
+	}
+	// Fallback: match by formula strings
+	if fs, ok := FindFormulaSetByFormulas(abs.FormulaSet.PanFormula, abs.FormulaSet.TiltFormula); ok {
+		return CameraCalibration{Pose: pose, Formulas: fs}, nil
+	}
+	return CameraCalibration{}, fmt.Errorf("unknown formula set: %s / %s", abs.FormulaSet.Name, abs.FormulaSet.PanFormula)
 }
 
 // FormulaSpecificResiduals computes residuals using a specific formula set
@@ -174,8 +326,8 @@ func (r *FormulaSpecificResiduals) Residuals(params []float64) []float64 {
 		cx, cy, cz := camPoint.X, camPoint.Y, camPoint.Z
 
 		// Compute pan/tilt using THIS formula set
-		predictedPanRad := r.Formulas.ComputePan(cx, cy, cz)
-		predictedTiltRad := r.Formulas.ComputeTilt(cx, cy, cz)
+		predictedPanRad := r.Formulas.Functions.ComputePan(cx, cy, cz)
+		predictedTiltRad := r.Formulas.Functions.ComputeTilt(cx, cy, cz)
 
 		// Convert to degrees
 		predictedPanDeg := utils.RadiansToDegrees(predictedPanRad)
@@ -236,9 +388,9 @@ func AutoDiscoverBestFormulas(measurements []utils.PTZMeasurement, limits utils.
 	var results []Result
 
 	for i, formulas := range formulaSets {
-		fmt.Printf("\n[%d/%d] Testing: %s\n", i+1, len(formulaSets), formulas.Name)
-		fmt.Printf("  Pan:  %s\n", formulas.PanFormula)
-		fmt.Printf("  Tilt: %s\n", formulas.TiltFormula)
+		fmt.Printf("\n[%d/%d] Testing: %s\n", i+1, len(formulaSets), formulas.Names.Name)
+		fmt.Printf("  Pan:  %s\n", formulas.Names.PanFormula)
+		fmt.Printf("  Tilt: %s\n", formulas.Names.TiltFormula)
 
 		pose, finalError, status := optimizeWithFormulas(measurements, limits, approxCameraPos, formulas)
 
@@ -268,9 +420,9 @@ func AutoDiscoverBestFormulas(measurements []utils.PTZMeasurement, limits utils.
 	fmt.Println("\n╔════════════════════════════════════════════════════════╗")
 	fmt.Println("║                  WINNER FOUND!                         ║")
 	fmt.Println("╚════════════════════════════════════════════════════════╝")
-	fmt.Printf("Name:        %s\n", best.Formulas.Name)
-	fmt.Printf("Pan:         %s\n", best.Formulas.PanFormula)
-	fmt.Printf("Tilt:        %s\n", best.Formulas.TiltFormula)
+	fmt.Printf("Name:        %s\n", best.Formulas.Names.Name)
+	fmt.Printf("Pan:         %s\n", best.Formulas.Names.PanFormula)
+	fmt.Printf("Tilt:        %s\n", best.Formulas.Names.TiltFormula)
 	fmt.Printf("Final error: %.6f\n", best.FinalError)
 	fmt.Printf("Position:    [%.3f, %.3f, %.3f]\n",
 		approxCameraPos.X, approxCameraPos.Y, approxCameraPos.Z)
@@ -376,12 +528,6 @@ func optimizeWithFormulas(measurements []utils.PTZMeasurement, limits utils.Came
 	return pose, finalError, result.Status
 }
 
-// CameraCalibration stores both pose and formulas
-type CameraCalibration struct {
-	Pose     spatialmath.Pose
-	Formulas FormulaSet
-}
-
 // XYZToPanTiltWithFormulas converts world position to pan/tilt using discovered formulas
 func XYZToPanTiltWithFormulas(targetPosition r3.Vector, calibration CameraCalibration,
 	cameraLimits utils.CameraLimits) utils.PanTiltResult {
@@ -392,8 +538,8 @@ func XYZToPanTiltWithFormulas(targetPosition r3.Vector, calibration CameraCalibr
 	cx, cy, cz := camPoint.X, camPoint.Y, camPoint.Z
 
 	// Use discovered formulas
-	panRad := calibration.Formulas.ComputePan(cx, cy, cz)
-	tiltRad := calibration.Formulas.ComputeTilt(cx, cy, cz)
+	panRad := calibration.Formulas.Functions.ComputePan(cx, cy, cz)
+	tiltRad := calibration.Formulas.Functions.ComputeTilt(cx, cy, cz)
 
 	// Convert to degrees
 	panDeg := utils.RadiansToDegrees(panRad)
@@ -728,44 +874,13 @@ func XYZToPanTiltStandard(targetPosition r3.Vector, cameraPose spatialmath.Pose,
 	}
 }
 
-// AbsolutePositionCalibration stores camera pose for JSON serialization
-type AbsolutePositionCalibration struct {
-	Translation struct {
-		X float64 `json:"x"`
-		Y float64 `json:"y"`
-		Z float64 `json:"z"`
-	} `json:"translation"`
-	Orientation struct {
-		W float64 `json:"w"` // Real component
-		X float64 `json:"x"` // Imag
-		Y float64 `json:"y"` // Jmag
-		Z float64 `json:"z"` // Kmag
-	} `json:"orientation"`
-}
-
-// ToPose converts calibration data to spatialmath.Pose
-func (c *AbsolutePositionCalibration) ToPose() spatialmath.Pose {
-	translation := r3.Vector{
-		X: c.Translation.X,
-		Y: c.Translation.Y,
-		Z: c.Translation.Z,
-	}
-
-	orientation := &spatialmath.Quaternion{
-		Real: c.Orientation.W,
-		Imag: c.Orientation.X,
-		Jmag: c.Orientation.Y,
-		Kmag: c.Orientation.Z,
-	}
-
-	return spatialmath.NewPose(translation, orientation)
-}
-
 type AbsolutePositionTracker struct {
 	logger       logging.Logger
 	cameraLimits utils.CameraLimits
 	samples      []utils.PTZMeasurement
 	cameraPose   spatialmath.Pose
+
+	calibration CameraCalibration
 }
 
 const AbsolutePositionTrackerMinSamples = 6
@@ -779,28 +894,44 @@ func NewAbsolutePositionTracker(logger logging.Logger, cameraLimits utils.Camera
 }
 
 func NewAbsolutePositionTrackerWithCalibration(logger logging.Logger, cameraLimits utils.CameraLimits, calibration *AbsolutePositionCalibration) (*AbsolutePositionTracker, error) {
-	return &AbsolutePositionTracker{
+	tracker := &AbsolutePositionTracker{
 		logger:       logger,
 		cameraLimits: cameraLimits,
-		cameraPose:   calibration.ToPose(),
-	}, nil
+	}
+
+	// Rehydrate calibration (pose + formulas) from serialized struct
+	camCal, err := AbsoluteToCameraCalibration(calibration)
+	if err != nil {
+		// still set pose so tracker can function; log error
+		tracker.cameraPose = calibration.ToPose()
+		return tracker, fmt.Errorf("failed to rehydrate formulas from calibration: %w", err)
+	}
+	tracker.cameraPose = camCal.Pose
+	tracker.calibration = camCal
+	return tracker, nil
 }
 
 func (a *AbsolutePositionTracker) Calibrate(measurements []utils.PTZMeasurement) error {
 	a.samples = measurements
 	// Approximate camera position (your guesstimate)
-	cameraPose, err := SolveCameraPoseStandard(a.samples, a.cameraLimits, a.cameraPose.Point())
+	cameraPose, formulas, err := AutoDiscoverBestFormulas(measurements, a.cameraLimits, a.cameraPose.Point())
+	// cameraPose, err := SolveCameraPoseStandard(a.samples, a.cameraLimits, a.cameraPose.Point())
 	if err != nil {
 		return fmt.Errorf("failed to solve for camera pose: %w", err)
 	}
 
 	a.cameraPose = cameraPose
+	a.calibration = CameraCalibration{
+		Pose:     cameraPose,
+		Formulas: formulas,
+	}
 	return nil
 }
 
 func (a *AbsolutePositionTracker) CalculatePTZ(targetPose r3.Vector, cameraPose spatialmath.Pose) (utils.PTZValues, error) {
 	fmt.Printf("cameraPose: %.3f,%.3f,%.3f, a.cameraPose: %.3f,%.3f,%.3f\n", cameraPose.Point().X, cameraPose.Point().Y, cameraPose.Point().Z, a.cameraPose.Point().X, a.cameraPose.Point().Y, a.cameraPose.Point().Z)
-	ptzResult := XYZToPanTiltStandard(targetPose, cameraPose, a.cameraLimits)
+	ptzResult := XYZToPanTiltWithFormulas(targetPose, a.calibration, a.cameraLimits)
+	// ptzResult := XYZToPanTiltStandard(targetPose, cameraPose, a.cameraLimits)
 	if !ptzResult.IsValid {
 		return utils.PTZValues{}, fmt.Errorf("invalid PTZ result: %s", ptzResult.ErrorMessage)
 	}
@@ -813,9 +944,9 @@ func (a *AbsolutePositionTracker) CalculatePTZ(targetPose r3.Vector, cameraPose 
 	return ptzValues, nil
 }
 
-func (a *AbsolutePositionTracker) GetCalibration() (cameraPose spatialmath.Pose, err error) {
+func (a *AbsolutePositionTracker) GetCalibration() (cameraCalibration CameraCalibration, err error) {
 	if a.cameraPose == nil {
-		return nil, fmt.Errorf("camera pose not yet calibrated")
+		return CameraCalibration{}, fmt.Errorf("camera pose not yet calibrated")
 	}
-	return a.cameraPose, nil
+	return a.calibration, nil
 }

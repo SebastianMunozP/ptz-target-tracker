@@ -17,7 +17,6 @@ import (
 	"go.viam.com/rdk/resource"
 	"go.viam.com/rdk/robot/framesystem"
 	genericservice "go.viam.com/rdk/services/generic"
-	"go.viam.com/rdk/spatialmath"
 	rdk_utils "go.viam.com/utils"
 )
 
@@ -149,7 +148,7 @@ type componentTracker struct {
 	samples                           []utils.PTZMeasurement
 	tracker                           trackers.Tracker
 	polynomialMethodCalibration       trackers.PolynomialCalibration
-	absolutePositionMethodCalibration spatialmath.Pose
+	absolutePositionMethodCalibration trackers.AbsolutePositionCalibration
 
 	// PTZ related fields
 	lastSentTZValues utils.PTZValues
@@ -436,10 +435,26 @@ func (t *componentTracker) DoCommand(ctx context.Context, cmd map[string]interfa
 				return nil, fmt.Errorf("failed to get absolute position calibration: %w", err)
 			}
 			t.logger.Infof("Calibrated with camera pose: %v", absolutePositionCalibration)
+			// Build a serialization-friendly representation (no function values)
+			var absCal trackers.AbsolutePositionCalibration
+			pt := absolutePositionCalibration.Pose.Point()
+			absCal.Translation.X = pt.X
+			absCal.Translation.Y = pt.Y
+			absCal.Translation.Z = pt.Z
+			quat := absolutePositionCalibration.Pose.Orientation().Quaternion()
+			absCal.Orientation.W = quat.Real
+			absCal.Orientation.X = quat.Imag
+			absCal.Orientation.Y = quat.Jmag
+			absCal.Orientation.Z = quat.Kmag
+			// Formula names
+			absCal.FormulaSet.Name = absolutePositionCalibration.Formulas.Names.Name
+			absCal.FormulaSet.PanFormula = absolutePositionCalibration.Formulas.Names.PanFormula
+			absCal.FormulaSet.TiltFormula = absolutePositionCalibration.Formulas.Names.TiltFormula
+
 			return map[string]interface{}{
 				"status":       "success",
 				"samples_used": len(t.samples),
-				"camera_pose":  utils.PoseToMap(absolutePositionCalibration),
+				"calibration":  absCal,
 			}, nil
 		}
 		// If we get here, it means the tracker is not a polynomial or absolute position tracker

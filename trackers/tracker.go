@@ -16,5 +16,5 @@ type PolynomialCalibrationProvider interface {
 	GetCalibration() (PolynomialCalibration, error)
 }
 type AbsolutePositionCalibrationProvider interface {
-	GetCalibration() (spatialmath.Pose, error)
+	GetCalibration() (CameraCalibration, error)
 }
